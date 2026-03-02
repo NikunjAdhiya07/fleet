@@ -23,8 +23,8 @@ export async function POST(req: Request) {
     }
 
     const normalizedStatus = String(status).toUpperCase();
-    if (!["ON", "OFF"].includes(normalizedStatus)) {
-      return NextResponse.json({ error: "status must be ON or OFF" }, { status: 400 });
+    if (!["ON", "OFF", "PERMISSION_DENIED", "PERMISSION_RESTORED"].includes(normalizedStatus)) {
+      return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     }
 
     await connectToDatabase();
@@ -33,6 +33,7 @@ export async function POST(req: Request) {
       deviceId,
       employeeName: employeeName || "Unknown",
       status: normalizedStatus,
+      reason: body.reason,
       timestamp: timestamp ? new Date(Number(timestamp)) : new Date(),
     });
 
