@@ -1,0 +1,21 @@
+import mongoose, { Schema, Document } from 'mongoose';
+
+export interface IToggleLog extends Document {
+  deviceId: string;
+  employeeName: string;
+  status: 'ON' | 'OFF';
+  timestamp: Date;
+  createdAt: Date;
+}
+
+const ToggleLogSchema = new Schema(
+  {
+    deviceId: { type: String, required: true },
+    employeeName: { type: String, default: 'Unknown' },
+    status: { type: String, enum: ['ON', 'OFF'], required: true },
+    timestamp: { type: Date, required: true }
+  },
+  { timestamps: true }
+);
+
+export default mongoose.models.ToggleLog || mongoose.model<IToggleLog>('ToggleLog', ToggleLogSchema);

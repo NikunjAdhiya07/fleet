@@ -196,24 +196,24 @@ export default function UsersPage() {
             <form onSubmit={createUser} className="space-y-5">
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Full Name</label>
-                <Input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="h-11 bg-slate-950/50 border-slate-700/80 focus:ring-fuchsia-500/50" placeholder="John Doe" />
+                <Input required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="h-11 bg-slate-950/50 border-slate-700/80 text-white focus:ring-fuchsia-500/50" placeholder="John Doe" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Username <span className="text-slate-500 opacity-60">(Opt)</span></label>
-                <Input value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} className="h-11 bg-slate-950/50 border-slate-700/80 focus:ring-fuchsia-500/50" placeholder="@johndoe123" />
+                <Input value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} className="h-11 bg-slate-950/50 border-slate-700/80 text-white focus:ring-fuchsia-500/50" placeholder="@johndoe123" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Email</label>
-                <Input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="h-11 bg-slate-950/50 border-slate-700/80 focus:ring-fuchsia-500/50" placeholder="john@company.com" />
+                <Input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="h-11 bg-slate-950/50 border-slate-700/80 text-white focus:ring-fuchsia-500/50" placeholder="john@company.com" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Password</label>
-                <Input required type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="h-11 bg-slate-950/50 border-slate-700/80 focus:ring-fuchsia-500/50" placeholder="••••••••" />
+                <Input required type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="h-11 bg-slate-950/50 border-slate-700/80 text-white focus:ring-fuchsia-500/50" placeholder="••••••••" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Role</label>
                 <Select value={formData.role} onValueChange={v => setFormData({...formData, role: v})}>
-                  <SelectTrigger className="h-11 bg-slate-950/50 border-slate-700/80 focus:ring-fuchsia-500/50">
+                  <SelectTrigger className="h-11 bg-slate-950/50 border-slate-700/80 text-white focus:ring-fuchsia-500/50">
                     <SelectValue placeholder="Select a role" />
                   </SelectTrigger>
                   <SelectContent className="bg-slate-900 border-slate-800">
@@ -425,24 +425,24 @@ export default function UsersPage() {
           <form onSubmit={updateUser} className="space-y-4 py-4">
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-300">Full Name</label>
-              <Input required value={editFormData.name} onChange={e => setEditFormData({...editFormData, name: e.target.value})} className="bg-slate-950 border-slate-700" />
+              <Input required value={editFormData.name} onChange={e => setEditFormData({...editFormData, name: e.target.value})} className="bg-slate-950 border-slate-700 text-white" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-300">Username</label>
-              <Input value={editFormData.username} onChange={e => setEditFormData({...editFormData, username: e.target.value})} className="bg-slate-950 border-slate-700" placeholder="Optional" />
+              <Input value={editFormData.username} onChange={e => setEditFormData({...editFormData, username: e.target.value})} className="bg-slate-950 border-slate-700 text-white" placeholder="Optional" />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-300">Email</label>
-              <Input required type="email" value={editFormData.email} onChange={e => setEditFormData({...editFormData, email: e.target.value})} className="bg-slate-950 border-slate-700" />
+              <Input required type="email" value={editFormData.email} onChange={e => setEditFormData({...editFormData, email: e.target.value})} className="bg-slate-950 border-slate-700 text-white" />
             </div>
             <div className="space-y-2">
                <label className="text-sm font-medium text-slate-300">New Password (Optional)</label>
-               <Input type="password" value={editFormData.password} onChange={e => setEditFormData({...editFormData, password: e.target.value})} className="bg-slate-950 border-slate-700" placeholder="Leave blank to keep current" />
+               <Input type="password" value={editFormData.password} onChange={e => setEditFormData({...editFormData, password: e.target.value})} className="bg-slate-950 border-slate-700 text-white" placeholder="Leave blank to keep current" />
             </div>
             <div className="space-y-2">
                <label className="text-sm font-medium text-slate-300">Role</label>
                <Select value={editFormData.role} onValueChange={v => setEditFormData({...editFormData, role: v})}>
-                 <SelectTrigger className="bg-slate-950 border-slate-700">
+                 <SelectTrigger className="bg-slate-950 border-slate-700 text-white">
                    <SelectValue placeholder="Select a role" />
                  </SelectTrigger>
                  <SelectContent className="bg-slate-900 border-slate-800">
