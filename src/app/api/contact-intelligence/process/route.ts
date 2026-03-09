@@ -10,12 +10,20 @@ import { runContactIntelligence } from "@/lib/contactIntelligence";
 
 export const maxDuration = 60;
 
+/**
+ * GET /api/contact-intelligence/process
+ *
+ * Manual trigger (dashboard button only). Processes all new calls since
+ * the last checkpoint and runs contact intelligence on each.
+ *
+ * Note: Automated triggering happens inline in /api/calls when a call is received
+ * from the Android app. This endpoint is only for catching any calls that may
+ * have been missed (e.g., during downtime).
+ */
 export async function GET(req: Request) {
-  // Support both manual dashboard triggers (via session) and automated Vercel Cron
   const session = await getServerSession(authOptions);
-  const isCron = req.headers.get("Authorization") === `Bearer ${process.env.CRON_SECRET}`;
 
-  if (!isCron && (!session || session.user.role === "driver")) {
+  if (!session || session.user.role === "driver") {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -46,7 +54,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: true, processedCount: 0, message: "No new calls since last run." });
     }
 
-    console.log(`[Intelligence Cron] Processing ${newCalls.length} new call(s) since ${since.toISOString()}`);
+    console.log(`[Intelligence Manual] Processing ${newCalls.length} new call(s) since ${since.toISOString()}`);
 
     let processedCount = 0;
 
@@ -73,7 +81,7 @@ export async function GET(req: Request) {
     // ── 3. Advance checkpoint to the current time ─────────────────────────────
     await IntelligenceCheckpoint.updateOne({ key: "main" }, { lastProcessedAt: runAt });
 
-    console.log(`[Intelligence Cron] Processed ${processedCount} contact(s). Checkpoint advanced to ${runAt.toISOString()}`);
+    console.log(`[Intelligence Manual] Processed ${processedCount} contact(s). Checkpoint advanced to ${runAt.toISOString()}`);
 
     return NextResponse.json({ success: true, processedCount });
   } catch (error) {
