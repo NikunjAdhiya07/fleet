@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import connectToDatabase from "@/lib/db";
 import DeviceCallLog from "@/models/DeviceCallLog";
+import { runContactIntelligence } from "@/lib/contactIntelligence";
 
 // POST — called by the Android app (authenticated via X-API-Key)
 export async function POST(req: Request) {
@@ -40,6 +41,15 @@ export async function POST(req: Request) {
     });
 
     console.log(`📞 ${callType} | ${employeeName} | ${phoneNumber} | ${duration}s`);
+
+    // Fire-and-forget: run contact intelligence without blocking the response.
+    // contactName from the Android app is the name from phone contacts (empty string if unknown).
+    const resolvedEmployee = employeeName || "Unknown";
+    const resolvedContact = contactName && contactName !== "Unknown" ? contactName : undefined;
+    runContactIntelligence(phoneNumber, resolvedContact, resolvedEmployee, deviceId || "").catch(
+      (err) => console.error("[Intelligence] Uncaught error:", err)
+    );
+
     return NextResponse.json({ success: true, id: callLog._id }, { status: 201 });
   } catch (error: any) {
     console.error("Failed to save call log:", error);

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users, Map, Navigation, CreditCard, Phone, UserCog, FileText, X, Activity, Contact, Trash2, PieChart } from "lucide-react";
+import { LayoutDashboard, Users, Map, Navigation, CreditCard, Phone, UserCog, FileText, X, Activity, Contact, Trash2, PieChart, BrainCircuit, BotMessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "./SidebarContext";
 
@@ -14,6 +14,8 @@ const sidebarNavItems = [
   { title: "Expenses", href: "/expenses", icon: CreditCard },
   { title: "Call Logs", href: "/call-logs", icon: Phone },
   { title: "Analytics", href: "/analytics", icon: PieChart },
+  { title: "Contact Intelligence", href: "/contact-intelligence", icon: BrainCircuit },
+  { title: "Telegram Setup", href: "/telegram-setup", icon: BotMessageSquare },
   { title: "App Active Status", href: "/toggle-logs", icon: Activity },
   { title: "Contact Bank", href: "/contacts", icon: Contact },
   { title: "User Management", href: "/users", icon: UserCog },
