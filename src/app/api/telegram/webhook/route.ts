@@ -12,12 +12,16 @@ import {
   sendMessage,
 } from "@/lib/telegram";
 
-const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET;
-
 function isValidRequest(req: Request): boolean {
-  if (!WEBHOOK_SECRET) return true;
-  const secret = req.headers.get("x-telegram-bot-api-secret-token");
-  return secret === WEBHOOK_SECRET;
+  const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (!expectedSecret) return true; // If no secret configured, allow (for local dev)
+  
+  const providedSecret = req.headers.get("x-telegram-bot-api-secret-token");
+  if (providedSecret !== expectedSecret) {
+    console.warn(`[Webhook Auth] Token mismatch. Expected: '${expectedSecret}', got: '${providedSecret}'`);
+    return false;
+  }
+  return true;
 }
 
 export async function POST(req: Request) {

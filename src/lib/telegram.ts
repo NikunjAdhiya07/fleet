@@ -3,17 +3,16 @@
  * All functions are async and throw on Telegram API errors.
  */
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const BASE_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
-
 export type InlineButton = { text: string; callback_data: string };
 export type InlineKeyboard = InlineButton[][];
 
 async function callTelegram(method: string, body: object): Promise<any> {
+  const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
   if (!BOT_TOKEN) {
     console.warn('[Telegram] TELEGRAM_BOT_TOKEN is not set — skipping message.');
     return null;
   }
+  const BASE_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
   const res = await fetch(`${BASE_URL}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

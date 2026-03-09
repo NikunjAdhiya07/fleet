@@ -2,15 +2,16 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
-import DeviceCallLog from "@/models/DeviceCallLog";
+import CallLog from "@/models/CallLog";
 import IdentifiedContact from "@/models/IdentifiedContact";
 import UnknownNumberTracker from "@/models/UnknownNumberTracker";
 import EmployeeTelegram from "@/models/EmployeeTelegram";
+import IntelligenceCheckpoint from "@/models/IntelligenceCheckpoint";
 
 /**
  * GET /api/contact-intelligence/log
  *
- * Aggregates ALL unique (employeeName, phoneNumber) pairs from DeviceCallLog
+ * Aggregates ALL unique (employeeName, phoneNumber) pairs from CallLog
  * and computes the intelligence status for each:
  *   - Scenario A: contactName is known (from phone contacts)
  *   - Scenario B: unknown number, tracked by call count
@@ -28,13 +29,17 @@ export async function GET(req: Request) {
 
   await connectToDatabase();
 
-  // ── 1. Aggregate unique (employeeName, phoneNumber) from DeviceCallLog ──
-  const matchStage: any = {};
+  // ── 1. Aggregate unique (employeeName, phoneNumber) from CallLog (since checkpoint) ──
+  // Load the checkpoint so we only show calls after the last "Start Fresh"
+  const checkpoint = await IntelligenceCheckpoint.findOne({ key: "main" }).lean() as any;
+  const since: Date = checkpoint?.lastProcessedAt ?? new Date(0);
+
+  const matchStage: any = { createdAt: { $gt: since } };
   if (employeeFilter && employeeFilter !== "ALL") {
     matchStage.employeeName = employeeFilter;
   }
 
-  const aggregated = await DeviceCallLog.aggregate([
+  const aggregated = await CallLog.aggregate([
     { $match: matchStage },
     {
       $group: {

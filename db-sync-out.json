@@ -1,0 +1,30 @@
+{
+  "latestCallLog": {
+    "_id": "69aea9bcebc4c7bfd3000ce9",
+    "phoneNumber": "+917069333224",
+    "contactName": "Abhishek Desai",
+    "callType": "OUTGOING",
+    "duration": 87,
+    "timestamp": "2026-03-09T11:06:26.777Z",
+    "deviceId": "01ecc5e08f78e539",
+    "employeeName": "Chetan Desai",
+    "syncedAt": "2026-03-09T11:06:36.456Z",
+    "createdAt": "2026-03-09T11:06:36.456Z",
+    "updatedAt": "2026-03-09T11:06:36.456Z",
+    "__v": 0
+  },
+  "latestDeviceLog": {
+    "_id": "69aea7d596ce4dbcf5270ba8",
+    "phoneNumber": "9876543210",
+    "contactName": "Tony Stark",
+    "callType": "INCOMING",
+    "duration": 150,
+    "timestamp": "2026-03-09T10:58:29.088Z",
+    "deviceId": "test-device-2",
+    "employeeName": "matt murdock",
+    "syncedAt": "2026-03-09T10:58:29.088Z",
+    "createdAt": "2026-03-09T10:58:29.092Z",
+    "updatedAt": "2026-03-09T10:58:29.092Z",
+    "__v": 0
+  }
+}

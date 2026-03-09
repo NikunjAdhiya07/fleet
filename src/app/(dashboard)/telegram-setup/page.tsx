@@ -164,14 +164,42 @@ export default function TelegramSetupPage() {
   return (
     <div className="space-y-6 max-w-4xl">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-white flex items-center gap-3">
-          <BotMessageSquare className="h-8 w-8 text-indigo-400" />
-          Telegram Setup
-        </h1>
-        <p className="text-slate-400 mt-1 text-sm">
-          Employees are auto-detected from call logs. Add phone numbers so they can self-register.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-white flex items-center gap-3">
+            <BotMessageSquare className="h-8 w-8 text-indigo-400" />
+            Telegram Setup
+          </h1>
+          <p className="text-slate-400 mt-1 text-sm">
+            Employees are auto-detected from call logs. Add phone numbers so they can self-register.
+          </p>
+        </div>
+        
+        <button
+          onClick={async () => {
+            if (!confirm("Register the current URL as the Telegram webhook?")) return;
+            setActionLoading("webhook");
+            try {
+              const res = await fetch("/api/telegram/setup", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ webhookUrl: window.location.origin + "/api/telegram/webhook" }),
+              });
+              const data = await res.json();
+              if (res.ok) alert("Webhook registered successfully ✅");
+              else alert("Failed: " + (data.error || "Unknown error"));
+            } catch (err) {
+              alert("Error registering webhook");
+            } finally {
+              setActionLoading(null);
+            }
+          }}
+          disabled={actionLoading === "webhook"}
+          className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors disabled:opacity-50 whitespace-nowrap"
+        >
+          {actionLoading === "webhook" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          Register Webhook
+        </button>
       </div>
 
       {/* Stats */}

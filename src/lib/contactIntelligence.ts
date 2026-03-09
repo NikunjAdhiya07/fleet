@@ -38,8 +38,10 @@ export async function runContactIntelligence(
     await connectToDatabase();
 
     // ── Fetch the employee's Telegram chat ID ──────────────────────────────
+    console.log(`[Intelligence] Starting for phone: ${phoneNumber}, employee: ${employeeName}`);
     const empTelegram = await EmployeeTelegram.findOne({ employeeName }).lean() as any;
     const chatId: string | null = empTelegram?.telegramChatId ?? null;
+    console.log(`[Intelligence] Found EmployeeTelegram for ${employeeName}? ${!!empTelegram}, chatId: ${chatId}`);
 
     // ── 1. Check if already fully identified ──────────────────────────────
     const identified = await IdentifiedContact.findOne({
@@ -55,12 +57,22 @@ export async function runContactIntelligence(
       return;
     }
 
-    // ── 2. Check phone contacts (Contact model) ────────────────────────────
-    const phoneContact = await Contact.findOne({ deviceId, phoneNumber }).lean() as any;
+    // ── 2. Check phone contacts (Scenario A) ──────────────────────────────
+    // The Android app passes `contactName` if the number is saved in the phone contacts.
+    const isKnownContact = !!contactName && contactName !== 'Unknown';
+    let phoneContactName = contactName;
 
-    if (phoneContact) {
+    // Optional fallback to Contact model if we still want to check the DB
+    if (!isKnownContact) {
+      const phoneContact = await Contact.findOne({ deviceId, phoneNumber }).lean() as any;
+      if (phoneContact && phoneContact.contactName) {
+        phoneContactName = phoneContact.contactName;
+      }
+    }
+
+    if (phoneContactName && phoneContactName !== 'Unknown') {
       // Number IS saved in phone contacts — we only need the category
-      const name = phoneContact.contactName || contactName || 'Unknown';
+      const name = phoneContactName;
 
       if (!identified) {
         // Create a placeholder IdentifiedContact with the name from phone
@@ -81,44 +93,35 @@ export async function runContactIntelligence(
     }
 
     // ── 3. Unknown number — track frequency ───────────────────────────────
+    console.log(`[Intelligence] Unknown number path. Checking trackers...`);
     const now = new Date();
-    const existing = await UnknownNumberTracker.findOne({ phoneNumber, employeeName });
+    
+    // Use atomic $inc and upsert to prevent race conditions during bulk Android syncs
+    const tracker = await UnknownNumberTracker.findOneAndUpdate(
+      { phoneNumber, employeeName },
+      { 
+        $inc: { callCount: 1 },
+        $set: { lastSeen: now },
+        $setOnInsert: { firstSeen: now, status: 'tracking', deviceId }
+      },
+      { upsert: true, new: true }
+    );
 
-    if (existing) {
-      // Already tracking
-      if (existing.status !== 'tracking') {
-        // Already asked / identified — no action, but check reminder
-        if (identified && !identified.savedInPhone && !identified.remindLater && chatId) {
-          await sendSmartReminder(chatId, phoneNumber, identified.contactName ?? phoneNumber, identified.category ?? '');
-        }
-        return;
+    console.log(`[Intelligence] Tracker updated. Call count is now: ${tracker.callCount}. Status: ${tracker.status}`);
+
+    if (tracker.status === 'tracking' && tracker.callCount >= CALL_THRESHOLD && chatId) {
+      // Threshold reached — ask for name
+      const result = await sendNameRequest(chatId, phoneNumber, employeeName, tracker.callCount);
+      const messageId = result?.result?.message_id;
+
+      tracker.status = 'awaiting_name';
+      if (messageId) tracker.telegramMessageId = messageId;
+      await tracker.save();
+    } else if (tracker.status !== 'tracking' && tracker.status !== 'awaiting_name' && tracker.status !== 'awaiting_category') {
+      // Already asked / identified — no action, but check reminder
+      if (identified && !identified.savedInPhone && !identified.remindLater && chatId) {
+        await sendSmartReminder(chatId, phoneNumber, identified.contactName ?? phoneNumber, identified.category ?? '');
       }
-
-      existing.callCount += 1;
-      existing.lastSeen = now;
-      await existing.save();
-
-      if (existing.callCount >= CALL_THRESHOLD && chatId) {
-        // Threshold reached — ask for name
-        const result = await sendNameRequest(chatId, phoneNumber, employeeName, existing.callCount);
-        const messageId = result?.result?.message_id;
-
-        existing.status = 'awaiting_name';
-        if (messageId) existing.telegramMessageId = messageId;
-        await existing.save();
-      }
-    } else {
-      // First time seeing this number — create tracker
-      await UnknownNumberTracker.create({
-        phoneNumber,
-        employeeName,
-        deviceId,
-        callCount: 1,
-        firstSeen: now,
-        lastSeen: now,
-        status: 'tracking',
-      });
-      // 1 call — no message yet
     }
   } catch (err) {
     console.error('[ContactIntelligence] Error:', err);

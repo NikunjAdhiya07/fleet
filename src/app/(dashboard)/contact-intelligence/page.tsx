@@ -134,6 +134,7 @@ export default function ContactIntelligencePage() {
   const [dashData, setDashData] = useState<any>(null);
   const [dashLoading, setDashLoading] = useState(false);
   const [reminderLoading, setReminderLoading] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const fetchLogs = async (emp?: string) => {
     setLogsLoading(true);
@@ -214,6 +215,41 @@ export default function ContactIntelligencePage() {
     }
   };
 
+  const processNewCalls = async () => {
+    setIsProcessing(true);
+    try {
+      const res = await fetch("/api/contact-intelligence/process");
+      const data = await res.json();
+      if (res.ok) {
+        fetchLogs(selectedEmployee);
+        fetchDashboard();
+      } else {
+        alert(`Error processing calls: ${data.error}`);
+      }
+    } catch (e) {
+      alert("Failed to process calls.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const startFresh = async () => {
+    if (!confirm("This will:\n• Delete all identified contacts\n• Delete all unknown number trackers\n• Ignore all previous call history\n\nOnly NEW calls from this moment will trigger Telegram messages.\n\nContinue?")) return;
+    try {
+      const res = await fetch("/api/contact-intelligence/reset-checkpoint", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        alert(`✅ Done! Cleared ${data.deletedIdentified} identified contacts and ${data.deletedTrackers} unknown trackers. The bot will now only send messages for new calls going forward.`);
+        fetchLogs(selectedEmployee);
+        fetchDashboard();
+      } else {
+        alert("Failed to reset checkpoint.");
+      }
+    } catch (e) {
+      alert("Failed to reset.");
+    }
+  };
+
   const tabs: { id: Tab; label: string; icon: any }[] = [
     { id: "botlog", label: "Bot Activity Log", icon: Activity },
     { id: "identified", label: "Identified Contacts", icon: ShieldCheck },
@@ -234,13 +270,30 @@ export default function ContactIntelligencePage() {
             Bot activity monitoring, contact classification and compliance tracking
           </p>
         </div>
-        <button
-          onClick={() => (tab === "botlog" ? fetchLogs(selectedEmployee) : fetchDashboard())}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm transition-colors"
-        >
-          <RefreshCw className={cn("h-4 w-4", logsLoading && "animate-spin")} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={startFresh}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-600/30 font-medium text-sm transition-all"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Start Fresh
+          </button>
+          <button
+            onClick={processNewCalls}
+            disabled={isProcessing}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-sm transition-all disabled:opacity-50"
+          >
+            {isProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+            {isProcessing ? "Processing..." : "Process Now"}
+          </button>
+          <button
+            onClick={() => (tab === "botlog" ? fetchLogs(selectedEmployee) : fetchDashboard())}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm transition-colors"
+          >
+            <RefreshCw className={cn("h-4 w-4", logsLoading && "animate-spin")} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Tab Switcher */}
