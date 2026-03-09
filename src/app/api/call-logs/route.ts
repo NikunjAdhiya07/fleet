@@ -46,6 +46,9 @@ export async function GET(req: Request) {
 
     await connectToDatabase();
     
+    // Get the total unfiltered count first
+    const totalCount = await CallLog.countDocuments(query);
+
     // Using populate to efficiently retrieve the driver's info through userId
     const logs = await CallLog.find(query)
       .populate({
@@ -57,10 +60,9 @@ export async function GET(req: Request) {
           model: "User"
         }
       })
-      .sort({ timestamp: -1 })
-      .limit(200);
+      .sort({ timestamp: -1 });
 
-    return NextResponse.json(logs);
+    return NextResponse.json({ logs, totalCount });
   } catch (error) {
     console.error("Failed to fetch call logs:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

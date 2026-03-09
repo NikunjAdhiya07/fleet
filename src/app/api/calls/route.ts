@@ -14,9 +14,14 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { phoneNumber, contactName, callType, duration, timestamp, deviceId, employeeName } = body;
 
-    if (!phoneNumber || !callType || !deviceId) {
+    const missingFields: string[] = [];
+    if (!phoneNumber) missingFields.push("phoneNumber");
+    if (!callType) missingFields.push("callType");
+    if (!deviceId) missingFields.push("deviceId");
+
+    if (missingFields.length > 0) {
       return NextResponse.json(
-        { error: "Missing required fields: phoneNumber, callType, deviceId" },
+        { error: `Missing or empty required fields: ${missingFields.join(", ")}` },
         { status: 400 }
       );
     }

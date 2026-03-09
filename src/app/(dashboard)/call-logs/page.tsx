@@ -13,6 +13,7 @@ import { DateRange } from "react-day-picker";
 
 export default function CallLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("ALL");
@@ -61,7 +62,14 @@ export default function CallLogsPage() {
       const res = await fetch(url.toString());
       if (res.ok) {
         const data = await res.json();
-        setLogs(data);
+        // Handle both older array returns and newer object returns
+        if (Array.isArray(data)) {
+          setLogs(data);
+          setTotalCount(data.length);
+        } else {
+          setLogs(data.logs || []);
+          setTotalCount(data.totalCount || 0);
+        }
       }
     } catch (error) {
       console.error("Failed to fetch call logs:", error);
@@ -140,7 +148,7 @@ export default function CallLogsPage() {
             <CardTitle className="text-xs font-medium text-slate-400">Total Calls</CardTitle>
           </CardHeader>
           <CardContent className="pb-4 px-4">
-            <div className="text-2xl font-bold">{logs.length}</div>
+            <div className="text-2xl font-bold">{totalCount}</div>
           </CardContent>
         </Card>
         <Card className="bg-slate-900 border-slate-800 text-slate-100 col-span-1">
