@@ -2,14 +2,6 @@ import { NextResponse } from "next/server";
 import connectToDatabase from "@/lib/db";
 import Contact from "@/models/Contact";
 
-// Raise the body size limit to 10 MB to handle large contact lists
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: "10mb",
-    },
-  },
-};
 
 export async function POST(req: Request) {
   try {
