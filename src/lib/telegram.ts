@@ -3,24 +3,55 @@
  * All functions are async and throw on Telegram API errors.
  */
 
+import connectToDatabase from '@/lib/db';
+import BotLog from '@/models/BotLog';
+
 export type InlineButton = { text: string; callback_data: string };
 export type InlineKeyboard = InlineButton[][];
 
 async function callTelegram(method: string, body: object): Promise<any> {
   const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
   if (!BOT_TOKEN) {
-    console.warn('[Telegram] TELEGRAM_BOT_TOKEN is not set — skipping message.');
+    const msg = '[Telegram] TELEGRAM_BOT_TOKEN is not set in environment variables — cannot send any messages.';
+    console.warn(msg);
+    try {
+      await connectToDatabase();
+      await BotLog.create({ level: 'error', step: 'TELEGRAM_NO_TOKEN', message: msg });
+    } catch { /* ignore */ }
     return null;
   }
+
   const BASE_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
-  const res = await fetch(`${BASE_URL}/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
+  let data: any;
+  try {
+    const res = await fetch(`${BASE_URL}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    data = await res.json();
+  } catch (fetchErr: any) {
+    const msg = `[Telegram] Network error calling ${method}: ${fetchErr?.message}`;
+    console.error(msg);
+    try {
+      await connectToDatabase();
+      await BotLog.create({ level: 'error', step: 'TELEGRAM_NETWORK_ERROR', message: msg, data: { method, error: fetchErr?.message } });
+    } catch { /* ignore */ }
+    return null;
+  }
+
   if (!data.ok) {
-    console.error(`[Telegram] ${method} failed:`, data);
+    const msg = `[Telegram] API error on ${method}: ${data.description ?? JSON.stringify(data)}`;
+    console.error(msg, data);
+    try {
+      await connectToDatabase();
+      await BotLog.create({
+        level: 'error',
+        step: 'TELEGRAM_API_ERROR',
+        message: msg,
+        data: { method, requestBody: body, telegramResponse: data },
+      });
+    } catch { /* ignore */ }
   }
   return data;
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import connectToDatabase from "@/lib/db";
 import DeviceCallLog from "@/models/DeviceCallLog";
+import BotLog from "@/models/BotLog";
 import { runContactIntelligence } from "@/lib/contactIntelligence";
 
 // POST — called by the Android app (authenticated via X-API-Key)
@@ -42,12 +43,31 @@ export async function POST(req: Request) {
 
     console.log(`📞 ${callType} | ${employeeName} | ${phoneNumber} | ${duration}s`);
 
-    // Fire-and-forget: run contact intelligence without blocking the response.
-    // contactName from the Android app is the name from phone contacts (empty string if unknown).
+    // Log call receipt to BotLog for visibility on Vercel
     const resolvedEmployee = employeeName || "Unknown";
     const resolvedContact = contactName && contactName !== "Unknown" ? contactName : undefined;
+    BotLog.create({
+      level: 'info',
+      step: 'CALL_RECEIVED',
+      message: `📞 Call received from Android app — ${callType} | ${resolvedEmployee} | ${phoneNumber} | contact: "${resolvedContact ?? 'Unknown'}" | ${duration}s`,
+      data: { callType, employeeName: resolvedEmployee, phoneNumber, contactName: resolvedContact ?? null, duration, deviceId },
+      employeeName: resolvedEmployee,
+      phoneNumber,
+    }).catch(() => {});
+
+    // Fire-and-forget: run contact intelligence without blocking the response.
     runContactIntelligence(phoneNumber, resolvedContact, resolvedEmployee, deviceId || "").catch(
-      (err) => console.error("[Intelligence] Uncaught error:", err)
+      async (err) => {
+        console.error("[Intelligence] Uncaught error:", err);
+        BotLog.create({
+          level: 'error',
+          step: 'INTELLIGENCE_UNCAUGHT',
+          message: `Uncaught error in intelligence engine: ${err?.message ?? err}`,
+          data: { stack: err?.stack },
+          employeeName: resolvedEmployee,
+          phoneNumber,
+        }).catch(() => {});
+      }
     );
 
     return NextResponse.json({ success: true, id: callLog._id }, { status: 201 });
