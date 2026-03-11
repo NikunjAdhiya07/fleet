@@ -412,18 +412,30 @@ export default function CallLogsPage() {
                     
                     <div className="flex items-center justify-between bg-slate-900/60 p-3.5 rounded-lg border border-slate-700/50">
                       <div className="flex flex-col gap-1">
-                        <span className="text-slate-400 text-sm font-medium">Duration</span>
-                        <span className="text-slate-100 text-base font-bold">{formatDuration(log.duration)}</span>
+                        <span className="text-slate-500 text-xs uppercase tracking-wider font-semibold">Duration</span>
+                        <span className={cn(
+                          "text-base font-bold",
+                          log.callType === "MISSED" ? "text-rose-400" :
+                          log.duration >= 300 ? "text-emerald-400" : "text-slate-100"
+                        )}>
+                          {formatDuration(log.duration)}
+                        </span>
                       </div>
                       <div className="flex flex-col gap-1 items-end">
-                        <span className="text-slate-400 text-sm font-medium">Date & Time</span>
+                        <span className="text-slate-500 text-xs uppercase tracking-wider font-semibold">Date & Time</span>
                         <div className="flex flex-col items-end sm:flex-row sm:gap-2">
-                          <span className="text-slate-100 text-base font-bold">
+                          <span className={cn(
+                            "text-base font-bold",
+                            log.callType === "MISSED" ? "text-rose-400" : "text-slate-100"
+                          )}>
                             {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
                               ? format(new Date(log.timestamp), "MMM dd, yyyy")
                               : "N/A"}
                           </span>
-                          <span className="text-slate-300 text-sm font-semibold">
+                          <span className={cn(
+                            "text-sm font-semibold",
+                            log.callType === "MISSED" ? "text-rose-500/80" : "text-slate-400"
+                          )}>
                             {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
                               ? format(new Date(log.timestamp), "hh:mm a")
                               : ""}
