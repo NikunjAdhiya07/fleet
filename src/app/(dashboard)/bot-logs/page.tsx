@@ -13,6 +13,7 @@ import {
   Info,
   ChevronDown,
   ChevronRight,
+  PlayCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,7 @@ export default function BotLogsPage() {
   const [logs, setLogs] = useState<BotLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [clearing, setClearing] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<string>("ALL");
 
@@ -49,6 +51,24 @@ export default function BotLogsPage() {
       if (res.ok) setLogs(await res.json());
     } finally {
       setLoading(false);
+    }
+  };
+
+  const processNow = async () => {
+    setProcessing(true);
+    try {
+      const res = await fetch("/api/contact-intelligence/process");
+      const data = await res.json();
+      if (data.success) {
+        alert(`Processed ${data.processedCount} calls.`);
+        await fetchLogs();
+      } else {
+        alert(`Error: ${data.error || "Unknown error"}`);
+      }
+    } catch (e) {
+      alert("Failed to run process.");
+    } finally {
+      setProcessing(false);
     }
   };
 
@@ -98,6 +118,14 @@ export default function BotLogsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={processNow}
+            disabled={processing || loading}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm transition-colors disabled:opacity-50"
+          >
+            {processing ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
+            Process Now
+          </button>
           <button
             onClick={fetchLogs}
             disabled={loading}

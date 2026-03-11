@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import DeviceCallLog from "@/models/DeviceCallLog";
+import CallLog from "@/models/CallLog";
 import IdentifiedContact from "@/models/IdentifiedContact";
 import UnknownNumberTracker from "@/models/UnknownNumberTracker";
 import IntelligenceCheckpoint from "@/models/IntelligenceCheckpoint";
@@ -44,11 +45,15 @@ export async function GET(req: Request) {
     const runAt = new Date(); // Mark start time so we capture everything up to right now
 
     // ── 2. Find new calls since last checkpoint ───────────────────────────────
-    const newCalls = await DeviceCallLog.find({
-      createdAt: { $gt: since },
-    })
-      .sort({ createdAt: 1 })
-      .lean();
+    // We must check BOTH DeviceCallLog (Android app) and CallLog (Driver fleet app)
+    const [newDeviceCalls, newDriverCalls] = await Promise.all([
+      DeviceCallLog.find({ createdAt: { $gt: since } }).lean(),
+      CallLog.find({ createdAt: { $gt: since } }).lean()
+    ]);
+
+    const newCalls = [...newDeviceCalls, ...newDriverCalls].sort(
+      (a: any, b: any) => (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+    );
 
     if (newCalls.length === 0) {
       return NextResponse.json({ success: true, processedCount: 0, message: "No new calls since last run." });
