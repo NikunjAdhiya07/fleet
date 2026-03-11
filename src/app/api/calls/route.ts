@@ -55,20 +55,21 @@ export async function POST(req: Request) {
       phoneNumber,
     }).catch(() => {});
 
-    // Fire-and-forget: run contact intelligence without blocking the response.
-    runContactIntelligence(phoneNumber, resolvedContact, resolvedEmployee, deviceId || "").catch(
-      async (err) => {
-        console.error("[Intelligence] Uncaught error:", err);
-        BotLog.create({
-          level: 'error',
-          step: 'INTELLIGENCE_UNCAUGHT',
-          message: `Uncaught error in intelligence engine: ${err?.message ?? err}`,
-          data: { stack: err?.stack },
-          employeeName: resolvedEmployee,
-          phoneNumber,
-        }).catch(() => {});
-      }
-    );
+    // To avoid Vercel freezing the serverless function before the Telegram message sends,
+    // we MUST await the contact intelligence process completely.
+    try {
+      await runContactIntelligence(phoneNumber, resolvedContact, resolvedEmployee, deviceId || "");
+    } catch (err: any) {
+      console.error("[Intelligence] Uncaught error:", err);
+      await BotLog.create({
+        level: 'error',
+        step: 'INTELLIGENCE_UNCAUGHT',
+        message: `Uncaught error in intelligence engine: ${err?.message ?? err}`,
+        data: { stack: err?.stack },
+        employeeName: resolvedEmployee,
+        phoneNumber,
+      }).catch(() => {});
+    }
 
     return NextResponse.json({ success: true, id: callLog._id }, { status: 201 });
   } catch (error: any) {
