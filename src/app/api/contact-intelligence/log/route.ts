@@ -29,9 +29,9 @@ export async function GET(req: Request) {
 
   await connectToDatabase();
 
-  // ── 1. Aggregate unique (employeeName, phoneNumber) from CallLog (since checkpoint) ──
+  // ── 1. Aggregate unique (employeeName, phoneNumber) from CallLog and DeviceCallLog ──
   // Load the checkpoint so we only show calls after the last "Start Fresh"
-  const checkpoint = await IntelligenceCheckpoint.findOne({ key: "main" }).lean() as any;
+  const checkpoint = await IntelligenceCheckpoint.findOne({ key: "dashboard_cursor" }).lean() as any;
   const since: Date = checkpoint?.lastProcessedAt ?? new Date(0);
 
   const matchStage: any = { createdAt: { $gt: since } };
@@ -41,6 +41,7 @@ export async function GET(req: Request) {
 
   const aggregated = await CallLog.aggregate([
     { $match: matchStage },
+    { $unionWith: { coll: "devicecalllogs", pipeline: [{ $match: matchStage }] } },
     {
       $group: {
         _id: { employeeName: "$employeeName", phoneNumber: "$phoneNumber" },

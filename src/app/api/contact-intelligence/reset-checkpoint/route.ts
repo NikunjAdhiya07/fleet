@@ -22,11 +22,18 @@ export async function POST(req: Request) {
   const now = new Date();
 
   // 1. Advance checkpoint so only future calls are processed
-  await IntelligenceCheckpoint.findOneAndUpdate(
-    { key: "main" },
-    { lastProcessedAt: now },
-    { upsert: true }
-  );
+  await Promise.all([
+    IntelligenceCheckpoint.findOneAndUpdate(
+      { key: "process_cursor" },
+      { lastProcessedAt: now },
+      { upsert: true }
+    ),
+    IntelligenceCheckpoint.findOneAndUpdate(
+      { key: "dashboard_cursor" },
+      { lastProcessedAt: now },
+      { upsert: true }
+    )
+  ]);
 
   // 2. Clear all intelligence state — identified contacts + unknown number trackers
   const [deletedIdentified, deletedTrackers] = await Promise.all([

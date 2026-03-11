@@ -38,11 +38,11 @@ export async function GET(req: Request) {
     await connectToDatabase();
 
     // ── 1. Get the last processed timestamp ──────────────────────────────────
-    let checkpoint = await IntelligenceCheckpoint.findOne({ key: "main" });
+    let checkpoint = await IntelligenceCheckpoint.findOne({ key: "process_cursor" });
     if (!checkpoint) {
       // First ever run — only process calls from the last 24 hours to avoid mass spam on first deploy
       checkpoint = await IntelligenceCheckpoint.create({
-        key: "main",
+        key: "process_cursor",
         lastProcessedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
       });
     }
@@ -90,7 +90,7 @@ export async function GET(req: Request) {
     }
 
     // ── 3. Advance checkpoint to the current time ─────────────────────────────
-    await IntelligenceCheckpoint.updateOne({ key: "main" }, { lastProcessedAt: runAt });
+    await IntelligenceCheckpoint.updateOne({ key: "process_cursor" }, { lastProcessedAt: runAt }, { upsert: true });
 
     console.log(`[Intelligence Manual] Processed ${processedCount} contact(s). Checkpoint advanced to ${runAt.toISOString()}`);
 
