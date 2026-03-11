@@ -135,6 +135,32 @@ export default function ContactIntelligencePage() {
   const [dashLoading, setDashLoading] = useState(false);
   const [reminderLoading, setReminderLoading] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [sendingLogs, setSendingLogs] = useState<Record<string, { loading: boolean; text?: string; error?: boolean }>>({});
+
+  const handleManualSend = async (logData: any) => {
+    const key = `${logData.employeeName}-${logData.phoneNumber}`;
+    setSendingLogs(prev => ({ ...prev, [key]: { loading: true, text: "Sending..." } }));
+
+    try {
+      const res = await fetch("/api/contact-intelligence/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phoneNumber: logData.phoneNumber,
+          contactName: logData.contactName,
+          employeeName: logData.employeeName,
+        }),
+      });
+      const result = await res.json();
+      if (result.success) {
+        setSendingLogs(prev => ({ ...prev, [key]: { loading: false, text: "✅ Sent successfully!" } }));
+      } else {
+        setSendingLogs(prev => ({ ...prev, [key]: { loading: false, text: "❌ Error: " + result.error, error: true } }));
+      }
+    } catch (e: any) {
+      setSendingLogs(prev => ({ ...prev, [key]: { loading: false, text: "❌ Failed to send", error: true } }));
+    }
+  };
 
   const fetchLogs = async (emp?: string) => {
     setLogsLoading(true);
@@ -476,7 +502,32 @@ export default function ContactIntelligencePage() {
                               </td>
                               <td className="px-4 py-3 text-xs text-slate-400 max-w-[200px]">
                                 {isActionable ? (
-                                  <span className="text-rose-300">{log.actionNeeded}</span>
+                                  <div className="flex flex-col items-start gap-2">
+                                    <span className="text-rose-300 leading-tight">{log.actionNeeded}</span>
+                                    {log.hasTelegram && (
+                                      <div className="mt-1 flex flex-col items-start gap-1">
+                                        <button
+                                          onClick={() => handleManualSend(log)}
+                                          disabled={sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.loading}
+                                          className="flex items-center justify-center gap-1.5 px-3 py-1.5 w-full rounded-md bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 font-medium transition-colors disabled:opacity-50"
+                                        >
+                                          {sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.loading ? (
+                                            <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Sending...</>
+                                          ) : (
+                                            <><Send className="h-3.5 w-3.5" /> Send via Telegram</>
+                                          )}
+                                        </button>
+                                        {sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.text && (
+                                          <span className={cn(
+                                            "text-[11px] font-medium leading-tight",
+                                            sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.error ? "text-rose-400" : "text-emerald-400"
+                                          )}>
+                                            {sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.text}
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
                                 ) : (
                                   log.actionNeeded
                                 )}
@@ -528,8 +579,31 @@ export default function ContactIntelligencePage() {
                               />
                             </div>
                           )}
-                          <div className={cn("text-xs", isActionable ? "text-rose-300" : "text-slate-500")}>
+                          <div className={cn("text-xs flex flex-col gap-2", isActionable ? "text-rose-300" : "text-slate-500")}>
                             {log.actionNeeded}
+                            {isActionable && log.hasTelegram && (
+                              <div className="mt-1 flex flex-col items-start gap-1">
+                                <button
+                                  onClick={() => handleManualSend(log)}
+                                  disabled={sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.loading}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 font-medium transition-colors disabled:opacity-50"
+                                >
+                                  {sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.loading ? (
+                                    <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Sending...</>
+                                  ) : (
+                                    <><Send className="h-3.5 w-3.5" /> Send Telegram</>
+                                  )}
+                                </button>
+                                {sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.text && (
+                                  <span className={cn(
+                                    "text-[11px] font-medium leading-tight",
+                                    sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.error ? "text-rose-400" : "text-emerald-400"
+                                  )}>
+                                    {sendingLogs[`${log.employeeName}-${log.phoneNumber}`]?.text}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <div className="text-xs text-slate-600">
                             Last call: {log.lastCall ? format(new Date(log.lastCall), "MMM d, yyyy HH:mm") : "—"}
