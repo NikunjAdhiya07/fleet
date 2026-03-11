@@ -74,6 +74,13 @@ export async function runContactIntelligence(
       // Number IS saved in phone contacts — we only need the category
       const name = phoneContactName;
 
+      // If an IdentifiedContact already exists with a contactName, the category
+      // request was already sent in a previous call — skip to avoid spamming.
+      if (identified?.contactName) {
+        console.log(`[Intelligence] Scenario A for ${phoneNumber}/${employeeName} — category request already sent, skipping.`);
+        return;
+      }
+
       if (!identified) {
         // Create a placeholder IdentifiedContact with the name from phone
         await IdentifiedContact.create({
@@ -88,6 +95,8 @@ export async function runContactIntelligence(
       // Send category keyboard if we have a chat ID
       if (chatId) {
         await sendCategoryRequest(chatId, name, phoneNumber, employeeName);
+      } else {
+        console.log(`[Intelligence] Scenario A: no Telegram chatId for employee "${employeeName}" — cannot send message.`);
       }
       return;
     }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
-import CallLog from "@/models/CallLog";
+import DeviceCallLog from "@/models/DeviceCallLog";
 import IdentifiedContact from "@/models/IdentifiedContact";
 import UnknownNumberTracker from "@/models/UnknownNumberTracker";
 import IntelligenceCheckpoint from "@/models/IntelligenceCheckpoint";
@@ -44,7 +44,7 @@ export async function GET(req: Request) {
     const runAt = new Date(); // Mark start time so we capture everything up to right now
 
     // ── 2. Find new calls since last checkpoint ───────────────────────────────
-    const newCalls = await CallLog.find({
+    const newCalls = await DeviceCallLog.find({
       createdAt: { $gt: since },
     })
       .sort({ createdAt: 1 })
