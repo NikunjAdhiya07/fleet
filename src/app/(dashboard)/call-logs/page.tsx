@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Search, Loader2, Calendar as CalendarIcon, User } from "lucide-react";
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Search, Loader2, Calendar as CalendarIcon, User, ArrowRight } from "lucide-react";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
@@ -112,23 +112,23 @@ export default function CallLogsPage() {
     return `${m}m ${s}s`;
   };
 
-  const CallTypeBadge = ({ callType }: { callType: string }) => {
+  const CallTypeBadge = ({ callType, className }: { callType: string; className?: string }) => {
     if (callType === "INCOMING")
       return (
-        <Badge className="bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 gap-1">
-          <PhoneIncoming className="w-3 h-3" /> Incoming
+        <Badge className={cn("bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 gap-1", className)}>
+          <PhoneIncoming className="w-3.5 h-3.5" /> Incoming
         </Badge>
       );
     if (callType === "OUTGOING")
       return (
-        <Badge className="bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-sky-500/20 gap-1">
-          <PhoneOutgoing className="w-3 h-3" /> Outgoing
+        <Badge className={cn("bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-sky-500/20 gap-1", className)}>
+          <PhoneOutgoing className="w-3.5 h-3.5" /> Outgoing
         </Badge>
       );
     if (callType === "MISSED")
       return (
-        <Badge className="bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 gap-1">
-          <PhoneMissed className="w-3 h-3" /> Missed
+        <Badge className={cn("bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 gap-1", className)}>
+          <PhoneMissed className="w-3.5 h-3.5" /> Missed
         </Badge>
       );
     return null;
@@ -389,30 +389,51 @@ export default function CallLogsPage() {
             <div className="text-center text-slate-500 py-12 text-sm">No call logs found.</div>
           ) : (
             <div className="divide-y divide-slate-800">
-              {filteredLogs.map((log: any) => (
-                <div key={log._id} className="p-4 hover:bg-slate-800/40 transition-colors">
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div>
-                      <div className="font-semibold text-slate-200 text-sm">
-                        {getEmployeeName(log)}
+              {filteredLogs.map((log: any) => {
+                const isOutgoing = log.callType === "OUTGOING";
+                const employee = getEmployeeName(log);
+                const contact = log.contactName || log.phoneNumber;
+                const caller = isOutgoing ? employee : contact;
+                const calledTo = isOutgoing ? contact : employee;
+
+                return (
+                  <div key={log._id} className="p-4 hover:bg-slate-800/40 transition-colors w-full">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-3.5 w-full">
+                      <span className="font-bold text-slate-100 text-base sm:text-lg shrink-0">
+                        {caller}
+                      </span>
+                      <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-slate-500 shrink-0 block" />
+                      <span className="font-bold text-slate-300 text-base sm:text-lg shrink-0" >
+                        {calledTo}
+                      </span>
+                      <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-slate-500 shrink-0 block" />
+                      <CallTypeBadge callType={log.callType} className="text-xs sm:text-sm px-1.5 sm:px-2.5 py-0.5 shrink-0" />
+                    </div>
+                    
+                    <div className="flex items-center justify-between bg-slate-900/60 p-3.5 rounded-lg border border-slate-700/50">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-slate-400 text-sm font-medium">Duration</span>
+                        <span className="text-slate-100 text-base font-bold">{formatDuration(log.duration)}</span>
                       </div>
-                      <div className="text-slate-500 text-xs mt-0.5">
-                        {log.contactName || "Unknown Contact"}
+                      <div className="flex flex-col gap-1 items-end">
+                        <span className="text-slate-400 text-sm font-medium">Date & Time</span>
+                        <div className="flex flex-col items-end sm:flex-row sm:gap-2">
+                          <span className="text-slate-100 text-base font-bold">
+                            {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
+                              ? format(new Date(log.timestamp), "MMM dd, yyyy")
+                              : "N/A"}
+                          </span>
+                          <span className="text-slate-300 text-sm font-semibold">
+                            {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
+                              ? format(new Date(log.timestamp), "hh:mm a")
+                              : ""}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                    <CallTypeBadge callType={log.callType} />
                   </div>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-slate-300 font-mono text-xs">{log.phoneNumber}</span>
-                    <span className="text-slate-500 text-xs">{formatDuration(log.duration)}</span>
-                  </div>
-                  <div className="text-slate-600 text-xs mt-1.5">
-                    {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
-                      ? format(new Date(log.timestamp), "MMM dd, yyyy • HH:mm")
-                      : "N/A"}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

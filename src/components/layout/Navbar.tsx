@@ -1,13 +1,17 @@
 "use client";
 
 import { useSession, signOut } from "next-auth/react";
-import { LogOut, User, Menu } from "lucide-react";
+import { LogOut, User, Menu, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "./SidebarContext";
 
 export function Navbar() {
   const { data: session } = useSession();
   const { toggle } = useSidebar();
+
+  const handleRefresh = () => {
+    window.location.reload();
+  };
 
   return (
     <header className="h-16 flex items-center justify-between px-4 sm:px-6 bg-slate-900 border-b border-slate-800 shadow-sm z-20 w-full text-slate-100 flex-shrink-0">
@@ -21,7 +25,16 @@ export function Navbar() {
           <Menu className="h-5 w-5" />
         </button>
 
-        <span className="font-medium text-lg text-slate-400">Dashboard</span>
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-lg text-slate-400">Dashboard</span>
+          <button
+            onClick={handleRefresh}
+            className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            title="Refresh Dashboard"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 sm:gap-4">

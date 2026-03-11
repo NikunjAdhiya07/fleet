@@ -25,9 +25,11 @@ export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   const apiKey = req.headers.get("x-api-key");
   
+  const expectedKey = process.env.API_KEY || "change-this-key";
+  
   // Allow if valid API key OR if valid admin session
   const isAuthorized = 
-    (apiKey && apiKey === process.env.API_KEY) || 
+    (apiKey && apiKey === expectedKey) || 
     (session && session.user.role !== "driver");
 
   if (!isAuthorized) {
