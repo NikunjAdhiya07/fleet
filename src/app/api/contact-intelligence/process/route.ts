@@ -23,8 +23,14 @@ export const maxDuration = 60;
  */
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
+  const apiKey = req.headers.get("x-api-key");
+  
+  // Allow if valid API key OR if valid admin session
+  const isAuthorized = 
+    (apiKey && apiKey === process.env.API_KEY) || 
+    (session && session.user.role !== "driver");
 
-  if (!session || session.user.role === "driver") {
+  if (!isAuthorized) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
