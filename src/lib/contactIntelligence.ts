@@ -18,6 +18,7 @@ import Contact from '@/models/Contact';
 import IdentifiedContact from '@/models/IdentifiedContact';
 import UnknownNumberTracker from '@/models/UnknownNumberTracker';
 import EmployeeTelegram from '@/models/EmployeeTelegram';
+import BotLog from '@/models/BotLog';
 import {
   sendInlineKeyboard,
   sendReplyRequest,
@@ -28,6 +29,22 @@ import {
 
 const CALL_THRESHOLD = 5;
 
+async function log(
+  level: 'info' | 'warn' | 'error' | 'success',
+  step: string,
+  message: string,
+  data?: Record<string, any>,
+  employeeName?: string,
+  phoneNumber?: string
+) {
+  try {
+    console.log(`[BotLog][${level.toUpperCase()}][${step}] ${message}`, data ?? '');
+    await BotLog.create({ level, step, message, data: data ?? null, employeeName, phoneNumber });
+  } catch {
+    // Never let logging break the pipeline
+  }
+}
+
 export async function runContactIntelligence(
   phoneNumber: string,
   contactName: string | undefined,
@@ -37,52 +54,62 @@ export async function runContactIntelligence(
   try {
     await connectToDatabase();
 
+    await log('info', 'START', `Intelligence triggered`, { phoneNumber, contactName, employeeName, deviceId }, employeeName, phoneNumber);
+
     // ── Fetch the employee's Telegram chat ID ──────────────────────────────
-    console.log(`[Intelligence] Starting for phone: ${phoneNumber}, employee: ${employeeName}`);
     const empTelegram = await EmployeeTelegram.findOne({ employeeName }).lean() as any;
     const chatId: string | null = empTelegram?.telegramChatId ?? null;
-    console.log(`[Intelligence] Found EmployeeTelegram for ${employeeName}? ${!!empTelegram}, chatId: ${chatId}`);
+
+    await log(
+      empTelegram ? (chatId ? 'success' : 'warn') : 'error',
+      'LOOKUP_EMPLOYEE',
+      empTelegram
+        ? chatId
+          ? `Employee "${employeeName}" found with chatId ${chatId}`
+          : `Employee "${employeeName}" found in DB but Telegram NOT linked yet (no chatId) — employee must open bot and send /start + phone number`
+        : `Employee "${employeeName}" NOT in EmployeeTelegram table — admin must add their phone number in Telegram Setup page first`,
+      { empTelegramRecord: empTelegram ?? null },
+      employeeName,
+      phoneNumber
+    );
 
     // ── 1. Check if already fully identified ──────────────────────────────
-    const identified = await IdentifiedContact.findOne({
-      phoneNumber,
-      employeeName,
-    });
+    const identified = await IdentifiedContact.findOne({ phoneNumber, employeeName });
 
     if (identified?.contactName && identified?.category) {
-      // Fully known — only send smart reminder if not saved in phone
+      await log('info', 'SKIP_FULLY_DONE', `Contact already fully classified — name: "${identified.contactName}", category: "${identified.category}"`, undefined, employeeName, phoneNumber);
+      // Only send smart reminder if not saved in phone
       if (!identified.savedInPhone && !identified.remindLater && chatId) {
+        await log('info', 'REMINDER', `Sending save-to-phone reminder`, undefined, employeeName, phoneNumber);
         await sendSmartReminder(chatId, phoneNumber, identified.contactName, identified.category);
       }
       return;
     }
 
     // ── 2. Check phone contacts (Scenario A) ──────────────────────────────
-    // The Android app passes `contactName` if the number is saved in the phone contacts.
     const isKnownContact = !!contactName && contactName !== 'Unknown';
     let phoneContactName = contactName;
 
-    // Optional fallback to Contact model if we still want to check the DB
+    // Optional fallback to Contact model
     if (!isKnownContact) {
       const phoneContact = await Contact.findOne({ deviceId, phoneNumber }).lean() as any;
-      if (phoneContact && phoneContact.contactName) {
+      if (phoneContact?.contactName) {
         phoneContactName = phoneContact.contactName;
+        await log('info', 'CONTACT_DB_FALLBACK', `Found contact in DB: "${phoneContact.contactName}"`, undefined, employeeName, phoneNumber);
       }
     }
 
     if (phoneContactName && phoneContactName !== 'Unknown') {
-      // Number IS saved in phone contacts — we only need the category
       const name = phoneContactName;
+      await log('info', 'SCENARIO_A', `Scenario A — known contact: "${name}"`, undefined, employeeName, phoneNumber);
 
-      // If an IdentifiedContact already exists with a contactName, the category
-      // request was already sent in a previous call — skip to avoid spamming.
+      // Guard: if already sent category request (IdentifiedContact with name exists), skip
       if (identified?.contactName) {
-        console.log(`[Intelligence] Scenario A for ${phoneNumber}/${employeeName} — category request already sent, skipping.`);
+        await log('info', 'SKIP_ALREADY_SENT', `Category request already sent previously for "${name}" — skipping duplicate`, undefined, employeeName, phoneNumber);
         return;
       }
 
       if (!identified) {
-        // Create a placeholder IdentifiedContact with the name from phone
         await IdentifiedContact.create({
           phoneNumber,
           employeeName,
@@ -90,25 +117,27 @@ export async function runContactIntelligence(
           contactName: name,
           telegramChatId: chatId ?? undefined,
         });
+        await log('info', 'IDENTIFIED_CREATED', `Created IdentifiedContact for "${name}"`, undefined, employeeName, phoneNumber);
       }
 
-      // Send category keyboard if we have a chat ID
       if (chatId) {
-        await sendCategoryRequest(chatId, name, phoneNumber, employeeName);
+        await log('info', 'SENDING_CATEGORY', `Sending category keyboard to chatId ${chatId} for "${name}"`, undefined, employeeName, phoneNumber);
+        const result = await sendCategoryRequest(chatId, name, phoneNumber, employeeName);
+        await log('success', 'MESSAGE_SENT', `Category keyboard sent successfully`, { telegramResult: result }, employeeName, phoneNumber);
       } else {
-        console.log(`[Intelligence] Scenario A: no Telegram chatId for employee "${employeeName}" — cannot send message.`);
+        await log('warn', 'NO_CHATID', `Cannot send Telegram — employee "${employeeName}" has no linked Telegram chatId. They need to open the bot, send /start, then send their 10-digit phone number.`, undefined, employeeName, phoneNumber);
       }
       return;
     }
 
     // ── 3. Unknown number — track frequency ───────────────────────────────
-    console.log(`[Intelligence] Unknown number path. Checking trackers...`);
+    await log('info', 'SCENARIO_B', `Scenario B — unknown number (not in phone contacts)`, undefined, employeeName, phoneNumber);
+
     const now = new Date();
-    
-    // Use atomic $inc and upsert to prevent race conditions during bulk Android syncs
+
     const tracker = await UnknownNumberTracker.findOneAndUpdate(
       { phoneNumber, employeeName },
-      { 
+      {
         $inc: { callCount: 1 },
         $set: { lastSeen: now },
         $setOnInsert: { firstSeen: now, status: 'tracking', deviceId }
@@ -116,25 +145,41 @@ export async function runContactIntelligence(
       { upsert: true, new: true }
     );
 
-    console.log(`[Intelligence] Tracker updated. Call count is now: ${tracker.callCount}. Status: ${tracker.status}`);
+    await log('info', 'TRACKER_UPDATED', `Call count: ${tracker.callCount}/${CALL_THRESHOLD}, status: "${tracker.status}"`, { tracker: { callCount: tracker.callCount, status: tracker.status } }, employeeName, phoneNumber);
 
     if (tracker.status === 'tracking' && tracker.callCount >= CALL_THRESHOLD && chatId) {
-      // Threshold reached — ask for name
+      await log('info', 'THRESHOLD_REACHED', `Threshold of ${CALL_THRESHOLD} calls reached — sending name request to chatId ${chatId}`, undefined, employeeName, phoneNumber);
       const result = await sendNameRequest(chatId, phoneNumber, employeeName, tracker.callCount);
       const messageId = result?.result?.message_id;
 
       tracker.status = 'awaiting_name';
       if (messageId) tracker.telegramMessageId = messageId;
       await tracker.save();
+      await log('success', 'NAME_REQUEST_SENT', `Name request sent — messageId: ${messageId}`, { telegramResult: result }, employeeName, phoneNumber);
+
+    } else if (tracker.status === 'tracking' && tracker.callCount >= CALL_THRESHOLD && !chatId) {
+      await log('warn', 'THRESHOLD_NO_CHATID', `5 calls reached but employee "${employeeName}" has no Telegram linked — cannot send name request`, undefined, employeeName, phoneNumber);
+
     } else if (tracker.status !== 'tracking' && tracker.status !== 'awaiting_name' && tracker.status !== 'awaiting_category') {
-      // Already asked / identified — no action, but check reminder
       if (identified && !identified.savedInPhone && !identified.remindLater && chatId) {
         await sendSmartReminder(chatId, phoneNumber, identified.contactName ?? phoneNumber, identified.category ?? '');
       }
+    } else {
+      await log('info', 'TRACKING', `Tracking ${tracker.callCount}/${CALL_THRESHOLD} calls — no action yet`, undefined, employeeName, phoneNumber);
     }
-  } catch (err) {
+
+  } catch (err: any) {
     console.error('[ContactIntelligence] Error:', err);
-    // Non-blocking — never throw back to the call API
+    try {
+      await BotLog.create({
+        level: 'error',
+        step: 'UNHANDLED_ERROR',
+        message: err?.message ?? 'Unknown error in contactIntelligence',
+        data: { stack: err?.stack },
+        employeeName,
+        phoneNumber,
+      });
+    } catch { /* ignore */ }
   }
 }
 
@@ -153,7 +198,7 @@ async function sendCategoryRequest(
     `Number: <code>${phoneNumber}</code>\n\n` +
     `Who is this person?`;
 
-  await sendInlineKeyboard(chatId, text, categoryKeyboard(phoneNumber, employeeName));
+  return sendInlineKeyboard(chatId, text, categoryKeyboard(phoneNumber, employeeName));
 }
 
 async function sendNameRequest(
