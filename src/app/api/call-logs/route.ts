@@ -22,11 +22,8 @@ export async function GET(req: Request) {
 
     const query: any = {};
     if (session!.user.role !== "super_admin") {
-      // Admins only see their company's logs AND any old legacy logs without a company assigned (for testing)
-      query.$or = [
-        { companyId: new mongoose.Types.ObjectId(session!.user.companyId!) },
-        { companyId: { $exists: false } }
-      ];
+      // Admins only see their company's logs
+      query.companyId = new mongoose.Types.ObjectId(session!.user.companyId!)
     }
 
     if (driverId) {
@@ -88,10 +85,7 @@ export async function PUT(req: Request) {
     // Admins can only edit logs in their company
     const query: any = { _id: new mongoose.Types.ObjectId(_id) };
     if (session.user.role !== "super_admin") {
-      query.$or = [
-        { companyId: new mongoose.Types.ObjectId(session.user.companyId!) },
-        { companyId: { $exists: false } }
-      ];
+      query.companyId = new mongoose.Types.ObjectId(session.user.companyId!);
     }
 
     const updateData: any = {};
@@ -137,10 +131,7 @@ export async function DELETE(req: Request) {
     
     const query: any = { _id: new mongoose.Types.ObjectId(id) };
     if (session.user.role !== "super_admin") {
-       query.$or = [
-        { companyId: new mongoose.Types.ObjectId(session.user.companyId!) },
-        { companyId: { $exists: false } }
-      ];
+      query.companyId = new mongoose.Types.ObjectId(session.user.companyId!);
     }
 
     const result = await CallLog.deleteOne(query);
