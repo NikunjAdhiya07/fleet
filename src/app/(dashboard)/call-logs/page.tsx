@@ -10,9 +10,12 @@ import { cn } from "@/lib/utils";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DateRange } from "react-day-picker";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Info } from "lucide-react";
 
 export default function CallLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
+  const [tags, setTags] = useState<Record<string, Array<{name: string, savedBy: any[]}>>>({});
   const [totalCount, setTotalCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -20,6 +23,9 @@ export default function CallLogsPage() {
   const [dateFilter, setDateFilter] = useState<"ALL" | "TODAY" | "YESTERDAY" | "CUSTOM">("ALL");
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const [selectedEmployee, setSelectedEmployee] = useState<string>("ALL");
+  const [isTagModalOpen, setIsTagModalOpen] = useState(false);
+  const [selectedPhoneForTags, setSelectedPhoneForTags] = useState<string | null>(null);
+  const [isFetchingTags, setIsFetchingTags] = useState(false);
   const logsRef = useRef<HTMLDivElement>(null);
 
   const scrollToLogs = () => {
@@ -78,6 +84,30 @@ export default function CallLogsPage() {
     }
   };
 
+  const fetchTags = async (logsToProcess: any[]) => {
+    // Avoid re-fetching tags unnecessarily
+    const uniquePhones = [...new Set(logsToProcess.map((log) => log.phoneNumber))];
+    if (uniquePhones.length === 0) return;
+
+    try {
+      const res = await fetch("/api/contacts/tags/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phoneNumbers: uniquePhones }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTags((prev) => ({ ...prev, ...data.tags }));
+      }
+    } catch (error) {
+      console.error("Failed to fetch tags:", error);
+    }
+  };
+
+  // We should fetch tags once the page determines the filteredLogs that are visible.
+  // Using an effect that triggers on filteredLogs changes ensures tags represent
+  // what's visible, and avoids excessive repeated loading.
+  
   // Derive unique employee names from logs
   const employeeNames = useMemo(() => {
     const names = new Set<string>();
@@ -105,6 +135,12 @@ export default function CallLogsPage() {
       selectedEmployee === "ALL" || getEmployeeName(log) === selectedEmployee;
     return matchesSearch && matchesEmployee;
   });
+
+  useEffect(() => {
+    if (filteredLogs.length > 0) {
+      fetchTags(filteredLogs);
+    }
+  }, [logs, searchQuery, selectedEmployee]);
 
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -198,7 +234,7 @@ export default function CallLogsPage() {
             >
               All Employees
             </button>
-            {isLoading ? (
+            {employeeNames.length === 0 && isLoading ? (
               <div className="flex items-center gap-2 px-4 py-2">
                 <Loader2 className="h-3 w-3 animate-spin text-slate-500" />
                 <span className="text-xs text-slate-500">Loading...</span>
@@ -212,7 +248,8 @@ export default function CallLogsPage() {
                     "px-4 py-2 rounded-full text-xs font-semibold transition-all duration-200 flex items-center gap-2",
                     selectedEmployee === name
                       ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/25 scale-105"
-                      : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                      : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200",
+                    isLoading && "opacity-50 pointer-events-none"
                   )}
                 >
                   <span
@@ -326,7 +363,15 @@ export default function CallLogsPage() {
         </div>
 
         {/* Desktop Table */}
-        <div className="hidden sm:block">
+        <div className="hidden sm:block relative min-h-[200px]">
+          {isLoading && filteredLogs.length > 0 && (
+            <div className="absolute inset-0 z-20 bg-slate-950/40 backdrop-blur-[1px] flex items-center justify-center rounded-b-xl border-t border-slate-800 transition-all duration-300">
+              <div className="flex bg-slate-900 border border-slate-700 px-4 py-2.5 rounded-full shadow-xl items-center gap-3">
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                <span className="text-sm font-medium text-slate-200">Updating results...</span>
+              </div>
+            </div>
+          )}
           <Table>
             <TableHeader className="bg-slate-950/50">
               <TableRow className="border-slate-800 hover:bg-transparent">
@@ -339,16 +384,16 @@ export default function CallLogsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
+              {isLoading && filteredLogs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center">
+                  <TableCell colSpan={6} className="h-32 text-center border-b-0">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto text-indigo-500" />
                   </TableCell>
                 </TableRow>
               ) : filteredLogs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center text-slate-500">
-                    No call logs found.
+                  <TableCell colSpan={6} className="h-24 text-center text-slate-500 border-b-0">
+                    No call logs found matching your filters.
                   </TableCell>
                 </TableRow>
               ) : (
@@ -358,7 +403,27 @@ export default function CallLogsPage() {
                       {getEmployeeName(log)}
                     </TableCell>
                     <TableCell className="text-slate-400">
-                      {log.contactName || "Unknown"}
+                      <div className="flex flex-col gap-1 items-start">
+                        <span>{log.contactName || "Unknown"}</span>
+                        {/* Tags Display Desktop */}
+                        {tags[log.phoneNumber] && tags[log.phoneNumber].length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {tags[log.phoneNumber].map((t: any, idx: number) => (
+                              <button 
+                                key={idx} 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedPhoneForTags(log.phoneNumber);
+                                  setIsTagModalOpen(true);
+                                }}
+                                className="text-[10px] px-1.5 py-0 border border-slate-700 bg-slate-900/50 text-slate-400 hover:bg-slate-800 transition-colors rounded-full"
+                              >
+                                {t.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-slate-300 font-mono text-sm">
                       {log.phoneNumber}
@@ -380,34 +445,66 @@ export default function CallLogsPage() {
         </div>
 
         {/* Mobile Card List */}
-        <div className="block sm:hidden">
-          {isLoading ? (
-            <div className="flex items-center justify-center h-32">
+        <div className="block sm:hidden relative min-h-[200px]">
+          {isLoading && filteredLogs.length > 0 && (
+            <div className="absolute inset-0 z-20 bg-slate-950/40 backdrop-blur-[1px] flex items-center justify-center rounded-b-xl border-t border-slate-800 transition-all duration-300">
+              <div className="flex bg-slate-900 border border-slate-700 px-4 py-2.5 rounded-full shadow-xl items-center gap-3">
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                <span className="text-sm font-medium text-slate-200">Updating...</span>
+              </div>
+            </div>
+          )}
+          {isLoading && filteredLogs.length === 0 ? (
+            <div className="flex items-center justify-center h-48 border-t border-slate-800">
               <Loader2 className="h-6 w-6 animate-spin text-indigo-500" />
             </div>
           ) : filteredLogs.length === 0 ? (
-            <div className="text-center text-slate-500 py-12 text-sm">No call logs found.</div>
+            <div className="text-center text-slate-500 py-16 text-sm border-t border-slate-800">No call logs found matching your filters.</div>
           ) : (
-            <div className="divide-y divide-slate-800">
+            <div className="divide-y divide-slate-800 border-t border-slate-800">
               {filteredLogs.map((log: any) => {
                 const isOutgoing = log.callType === "OUTGOING";
                 const employee = getEmployeeName(log);
-                const contact = log.contactName || log.phoneNumber;
-                const caller = isOutgoing ? employee : contact;
-                const calledTo = isOutgoing ? contact : employee;
+                const contact = log.contactName && log.contactName !== "Unknown" ? log.contactName : log.phoneNumber;
+                
+                const renderParty = (name: string, isContact: boolean) => {
+                  const showPhone = isContact && name !== log.phoneNumber;
+                  return (
+                    <div className="flex flex-col">
+                      <span className={cn("font-bold text-base sm:text-lg shrink-0", isContact ? "text-slate-300" : "text-slate-100")}>
+                        {name}
+                      </span>
+                      {showPhone && (
+                        <span className="text-[12px] text-slate-500 font-mono -mt-0.5 leading-tight tracking-tight">
+                          {log.phoneNumber}
+                        </span>
+                      )}
+                    </div>
+                  );
+                };
 
                 return (
                   <div key={log._id} className="p-4 hover:bg-slate-800/40 transition-colors w-full">
-                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-3.5 w-full">
-                      <span className="font-bold text-slate-100 text-base sm:text-lg shrink-0">
-                        {caller}
-                      </span>
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-3 w-full">
+                      {isOutgoing ? renderParty(employee, false) : renderParty(contact, true)}
                       <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-slate-500 shrink-0 block" />
-                      <span className="font-bold text-slate-300 text-base sm:text-lg shrink-0" >
-                        {calledTo}
-                      </span>
+                      {isOutgoing ? renderParty(contact, true) : renderParty(employee, false)}
                       <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-slate-500 shrink-0 block" />
                       <CallTypeBadge callType={log.callType} className="text-xs sm:text-sm px-1.5 sm:px-2.5 py-0.5 shrink-0" />
+                      
+                      {/* Mobile Info Button for Tags */}
+                      {tags[log.phoneNumber] && tags[log.phoneNumber].length > 0 && (
+                        <button
+                           onClick={(e) => {
+                             e.stopPropagation();
+                             setSelectedPhoneForTags(log.phoneNumber);
+                             setIsTagModalOpen(true);
+                           }}
+                           className="ml-auto p-1.5 rounded-full hover:bg-slate-800 text-slate-400 transition-colors"
+                        >
+                          <Info className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                     
                     <div className="flex items-center justify-between bg-slate-900/60 p-3.5 rounded-lg border border-slate-700/50">
@@ -461,6 +558,60 @@ export default function CallLogsPage() {
         )}
       </Card>
       </div>
+
+      {/* Info Modal for Mobile Views */}
+      <Dialog open={isTagModalOpen} onOpenChange={setIsTagModalOpen}>
+        <DialogContent className="max-w-sm rounded-2xl bg-slate-950 border-slate-800 mx-4 w-[calc(100%-2rem)]">
+          <DialogHeader className="mb-2">
+            <DialogTitle className="text-lg font-bold text-white flex items-center gap-2">
+              <Info className="w-5 h-5 text-indigo-400" />
+              Contact Tags
+            </DialogTitle>
+            <div className="text-sm text-slate-400 font-mono mt-1 tracking-tight">
+              {selectedPhoneForTags}
+            </div>
+          </DialogHeader>
+          
+          <div className="flex flex-col px-1 pb-2">
+            <div className="text-sm font-semibold text-slate-300 mb-3 uppercase tracking-widest text-[11px] opacity-80">
+              Saved By Employees As
+            </div>
+            {selectedPhoneForTags && tags[selectedPhoneForTags] && tags[selectedPhoneForTags].length > 0 ? (
+              <div className="space-y-4">
+                {tags[selectedPhoneForTags].map((tag: any, i: number) => (
+                  <div key={i} className="flex flex-col gap-1.5 bg-slate-900/40 p-3 rounded-xl border border-slate-800/50">
+                    <div className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                      <span className="text-sm font-bold text-slate-200">{tag.name}</span>
+                    </div>
+                    {tag.savedBy && tag.savedBy.length > 0 && (
+                      <div className="pl-3.5 space-y-1 mt-1">
+                        {tag.savedBy.map((sb: any, idx: number) => (
+                          <div key={idx} className="flex items-center justify-between text-[11px]">
+                            <span className="text-slate-400 flex items-center gap-1.5">
+                              <User className="w-3 h-3 text-slate-500" />
+                              {sb.employeeName}
+                            </span>
+                            {sb.timestamp && (
+                              <span className="text-slate-500 font-mono tracking-tight">
+                                {format(new Date(sb.timestamp), "MMM dd, yyyy")}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-slate-500 italic py-2 text-center">
+                No tags found
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
