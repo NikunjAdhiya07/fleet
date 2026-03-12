@@ -1,5 +1,5 @@
 "use client";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { DateRange } from "react-day-picker";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Info } from "lucide-react";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
+} from "recharts";
 
 export default function CallLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
@@ -170,49 +178,92 @@ export default function CallLogsPage() {
     return null;
   };
 
+  const timeBuckets = useMemo(() => {
+    const labels = [];
+    for (let hour = 0; hour < 24; hour++) {
+      const nextHour = (hour + 1) % 24;
+      const formatHour = (h: number) => {
+        const period = h < 12 ? "AM" : "PM";
+        const display = h % 12 === 0 ? 12 : h % 12;
+        return `${display} ${period}`;
+      };
+      labels.push({
+        key: `${hour}`,
+        label: `${formatHour(hour)} – ${formatHour(nextHour)}`,
+        hour,
+      });
+    }
+    return labels;
+  }, []);
+
+  const chartData = useMemo(() => {
+    const base = timeBuckets.map((b) => ({
+      timeRange: b.label,
+      hour: b.hour,
+      incoming: 0,
+      outgoing: 0,
+      missed: 0,
+      total: 0,
+    }));
+
+    filteredLogs.forEach((log) => {
+      if (!log.timestamp) return;
+      const date = new Date(log.timestamp);
+      if (isNaN(date.getTime())) return;
+      const hour = date.getHours();
+      const bucket = base[hour];
+      if (!bucket) return;
+      if (log.callType === "INCOMING") bucket.incoming += 1;
+      else if (log.callType === "OUTGOING") bucket.outgoing += 1;
+      else if (log.callType === "MISSED") bucket.missed += 1;
+      bucket.total += 1;
+    });
+
+    return base.filter((b) => b.total > 0);
+  }, [filteredLogs, timeBuckets]);
+
+  const AnalyticsTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload || payload.length === 0) return null;
+    const data = payload[0].payload;
+
+    return (
+      <div className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs shadow-lg">
+        <div className="font-semibold text-slate-100 mb-1">{label}</div>
+        <div className="space-y-0.5">
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-slate-400">Incoming</span>
+            <span className="font-medium text-emerald-400">{data.incoming}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-slate-400">Outgoing</span>
+            <span className="font-medium text-sky-400">{data.outgoing}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-slate-400">Missed</span>
+            <span className="font-medium text-rose-400">{data.missed}</span>
+          </div>
+          <div className="mt-1 flex items-center justify-between gap-4 border-t border-slate-800 pt-1.5">
+            <span className="text-slate-400">Total</span>
+            <span className="font-semibold text-slate-100">{data.total}</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-5 relative">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">Call Logs</h1>
-      </div>
-
-      {/* Stats Row */}
-      <div className="grid gap-4 grid-cols-2 sm:grid-cols-4 relative z-10">
-        <Card className="bg-slate-900 border-slate-800 text-slate-100 col-span-1">
-          <CardHeader className="pb-1 pt-4 px-4">
-            <CardTitle className="text-xs font-medium text-slate-400">Total Calls</CardTitle>
-          </CardHeader>
-          <CardContent className="pb-4 px-4">
-            <div className="text-2xl font-bold">{totalCount}</div>
-          </CardContent>
-        </Card>
-        <Card className="bg-slate-900 border-slate-800 text-slate-100 col-span-1">
-          <CardHeader className="pb-1 pt-4 px-4">
-            <CardTitle className="text-xs font-medium text-slate-400">Showing</CardTitle>
-          </CardHeader>
-          <CardContent className="pb-4 px-4">
-            <div className="text-2xl font-bold">{filteredLogs.length}</div>
-          </CardContent>
-        </Card>
-        <Card className="bg-slate-900 border-slate-800 text-slate-100 col-span-1">
-          <CardHeader className="pb-1 pt-4 px-4">
-            <CardTitle className="text-xs font-medium text-slate-400">Employees</CardTitle>
-          </CardHeader>
-          <CardContent className="pb-4 px-4">
-            <div className="text-2xl font-bold">{employeeNames.length}</div>
-          </CardContent>
-        </Card>
-        <Card className="bg-slate-900 border-slate-800 text-slate-100 col-span-1">
-          <CardHeader className="pb-1 pt-4 px-4">
-            <CardTitle className="text-xs font-medium text-slate-400">Viewing</CardTitle>
-          </CardHeader>
-          <CardContent className="pb-4 px-4">
-            <div className="text-sm font-semibold text-indigo-400 truncate mt-1">
-              {selectedEmployee === "ALL" ? "All Employees" : selectedEmployee}
-            </div>
-          </CardContent>
-        </Card>
+      {/* Compact stats */}
+      <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-slate-400">
+        <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1">
+          <span className="font-medium text-slate-300">Total Calls:</span>
+          <span className="text-slate-100 font-semibold">{totalCount}</span>
+        </span>
+        <span className="text-slate-600">|</span>
+        <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1">
+          <span className="font-medium text-slate-300">Showing:</span>
+          <span className="text-slate-100 font-semibold">{filteredLogs.length}</span>
+        </span>
       </div>
 
       {/* Employee Filter Buttons */}
@@ -224,7 +275,10 @@ export default function CallLogsPage() {
           </div>
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => { setSelectedEmployee("ALL"); scrollToLogs(); }}
+              onClick={() => {
+                setSelectedEmployee("ALL");
+                scrollToLogs();
+              }}
               className={cn(
                 "px-4 py-2 rounded-full text-xs font-semibold transition-all duration-200",
                 selectedEmployee === "ALL"
@@ -243,7 +297,10 @@ export default function CallLogsPage() {
               employeeNames.map((name) => (
                 <button
                   key={name}
-                  onClick={() => { setSelectedEmployee(name); scrollToLogs(); }}
+                  onClick={() => {
+                    setSelectedEmployee(name);
+                    scrollToLogs();
+                  }}
                   className={cn(
                     "px-4 py-2 rounded-full text-xs font-semibold transition-all duration-200 flex items-center gap-2",
                     selectedEmployee === name
@@ -266,22 +323,9 @@ export default function CallLogsPage() {
         </div>
       </div>
 
-      {/* Filters & Search */}
-      <div ref={logsRef} className="scroll-mt-4">
-      <Card className="bg-slate-900 border-slate-800 text-slate-100 relative z-10">
-        <div className="p-3 sm:p-4 border-b border-slate-800 flex flex-col gap-3">
-          {/* Search */}
-          <div className="relative w-full">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
-            <Input
-              placeholder="Search by phone number..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 bg-slate-950 border-slate-700 text-white w-full"
-            />
-          </div>
-
-          {/* Call Type + Date Filters */}
+      {/* Global call/date filters (just under employee filter) */}
+      <div className="relative z-10">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 sm:px-4 sm:py-3">
           <div className="flex flex-col sm:flex-row gap-3 sm:justify-between">
             {/* Call Type */}
             <div className="flex gap-2 overflow-x-auto pb-1 sm:pb-0 flex-shrink-0">
@@ -359,6 +403,67 @@ export default function CallLogsPage() {
                 </PopoverContent>
               </Popover>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Call Activity Graph */}
+      <Card className="bg-slate-900 border-slate-800 text-slate-100 relative z-10">
+        <div className="p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <div className="space-y-0.5">
+              <p className="text-sm font-medium text-slate-200">Call Activity by Hour</p>
+              <p className="text-xs text-slate-500">
+                {selectedEmployee === "ALL" ? "All employees" : selectedEmployee} ·{" "}
+                {chartData.length > 0 ? "Stacked by call type" : "No calls in selected range"}
+              </p>
+            </div>
+          </div>
+          <div className="h-56 sm:h-64">
+            {chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} stackOffset="none">
+                  <XAxis
+                    dataKey="timeRange"
+                    tickLine={false}
+                    axisLine={{ stroke: "#1f2937" }}
+                    tick={{ fill: "#9ca3af", fontSize: 10 }}
+                    interval={3}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tickLine={false}
+                    axisLine={{ stroke: "#1f2937" }}
+                    tick={{ fill: "#9ca3af", fontSize: 10 }}
+                  />
+                  <RechartsTooltip content={<AnalyticsTooltip />} />
+                  <Bar dataKey="incoming" stackId="calls" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6" />
+                  <Bar dataKey="missed" stackId="calls" fill="#ef4444" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-slate-500">
+                No call activity for the selected filters.
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      {/* Filters & Search */}
+      <div ref={logsRef} className="scroll-mt-4">
+      <Card className="bg-slate-900 border-slate-800 text-slate-100 relative z-10">
+        <div className="p-3 sm:p-4 border-b border-slate-800 flex flex-col gap-3">
+          {/* Search */}
+          <div className="relative w-full">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
+            <Input
+              placeholder="Search by phone number..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 bg-slate-950 border-slate-700 text-white w-full"
+            />
           </div>
         </div>
 

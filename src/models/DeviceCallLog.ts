@@ -30,5 +30,9 @@ const DeviceCallLogSchema = new Schema(
 DeviceCallLogSchema.index({ deviceId: 1, timestamp: -1 });
 DeviceCallLogSchema.index({ employeeName: 1 });
 DeviceCallLogSchema.index({ timestamp: -1 });
+DeviceCallLogSchema.index(
+  { deviceId: 1, phoneNumber: 1, timestamp: 1, duration: 1 },
+  { unique: true }
+);
 
 export default mongoose.models.DeviceCallLog || mongoose.model<IDeviceCallLog>('DeviceCallLog', DeviceCallLogSchema);
