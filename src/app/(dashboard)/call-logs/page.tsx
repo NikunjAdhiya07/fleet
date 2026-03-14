@@ -52,7 +52,7 @@ export default function CallLogsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("ALL");
-  const [dateFilter, setDateFilter] = useState<"ALL" | "TODAY" | "YESTERDAY" | "CUSTOM">("ALL");
+  const [dateFilter, setDateFilter] = useState<"ALL" | "TODAY" | "YESTERDAY" | "CUSTOM">("TODAY");
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const [selectedEmployee, setSelectedEmployee] = useState<string>("ALL");
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
