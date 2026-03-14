@@ -10,6 +10,7 @@ export interface IDeviceCallLog extends Document {
   timestamp: Date;
   deviceId: string;
   employeeName: string;
+  companyId: mongoose.Types.ObjectId;
   syncedAt: Date;
 }
 
@@ -22,6 +23,7 @@ const DeviceCallLogSchema = new Schema(
     timestamp: { type: Date, required: true },
     deviceId: { type: String, required: true },
     employeeName: { type: String, default: 'Unknown' },
+    companyId: { type: Schema.Types.ObjectId, ref: 'Company' },
     syncedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

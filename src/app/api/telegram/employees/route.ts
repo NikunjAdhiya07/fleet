@@ -5,6 +5,7 @@ import connectToDatabase from "@/lib/db";
 import EmployeeTelegram from "@/models/EmployeeTelegram";
 import DeviceCallLog from "@/models/DeviceCallLog";
 import CallLog from "@/models/CallLog";
+import mongoose from "mongoose";
 
 /**
  * GET — returns a merged list of:
@@ -21,14 +22,23 @@ export async function GET() {
   }
   await connectToDatabase();
 
+  const query: any = {};
+  if (session.user.role !== "super_admin") {
+    query.companyId = new mongoose.Types.ObjectId(session.user.companyId!);
+  }
+
   // 1. Get all unique employee names from DeviceCallLog
-  const rawDeviceNames: string[] = await DeviceCallLog.distinct('employeeName');
+  const rawDeviceNames: string[] = await DeviceCallLog.distinct('employeeName', query);
   
   // 2. Get all unique employee names from CallLog
-  const rawCallLogNames: string[] = await CallLog.distinct('employeeName');
+  const rawCallLogNames: string[] = await CallLog.distinct('employeeName', query);
 
   // Also resolve null employeeNames in CallLog via driverId -> User name
-  const nullNameDriversData = await CallLog.aggregate([
+  const aggregationQuery: any[] = [];
+  if (session.user.role !== "super_admin") {
+    aggregationQuery.push({ $match: { companyId: new mongoose.Types.ObjectId(session.user.companyId!) } });
+  }
+  aggregationQuery.push(
     { $match: { employeeName: null } },
     { $group: { _id: "$driverId" } },
     {
@@ -53,8 +63,10 @@ export async function GET() {
       },
     },
     { $match: { resolvedName: { $ne: null } } },
-    { $sort: { resolvedName: 1 } },
-  ]);
+    { $sort: { resolvedName: 1 } }
+  );
+
+  const nullNameDriversData = await CallLog.aggregate(aggregationQuery);
 
   const resolvedNames = nullNameDriversData.map(e => e.resolvedName as string);
 
@@ -118,7 +130,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { employeeName, phoneNumber } = await req.json();
+  const body = await req.json();
+  const { employeeName, phoneNumber } = body;
   if (!employeeName || !phoneNumber) {
     return NextResponse.json(
       { error: "employeeName and phoneNumber are required" },
@@ -134,6 +147,7 @@ export async function POST(req: Request) {
   }
 
   // Upsert — create or update phone number (reset telegram link only if changing number)
+  const companyId = session.user.role === "super_admin" ? (body as any).companyId : session.user.companyId;
   const existing = await EmployeeTelegram.findOne({ employeeName });
   let mapping;
   if (existing) {
@@ -143,13 +157,21 @@ export async function POST(req: Request) {
       existing.telegramChatId = null;
       existing.registeredAt = null;
     }
+    // Update companyId if it was missing (for migration)
+    if (!existing.companyId && companyId) {
+      existing.companyId = new mongoose.Types.ObjectId(companyId);
+    }
     mapping = await existing.save();
   } else {
+    if (!companyId) {
+      return NextResponse.json({ error: "companyId is required for new employees" }, { status: 400 });
+    }
     mapping = await EmployeeTelegram.create({
       employeeName,
       phoneNumber: digits,
       telegramChatId: null,
       registeredAt: null,
+      companyId: new mongoose.Types.ObjectId(companyId),
     });
   }
 

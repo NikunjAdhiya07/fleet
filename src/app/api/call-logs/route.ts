@@ -3,7 +3,8 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import connectToDatabase from "@/lib/db";
 import CallLog from "@/models/CallLog";
-import Driver from "@/models/Driver";
+import DeviceCallLog from "@/models/DeviceCallLog";
+import EmployeeTelegram from "@/models/EmployeeTelegram";
 import mongoose from "mongoose";
 
 export async function GET(req: Request) {
@@ -20,10 +21,28 @@ export async function GET(req: Request) {
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
 
+    await connectToDatabase();
+    
     const query: any = {};
     if (session!.user.role !== "super_admin") {
-      // Admins only see their company's logs
-      query.companyId = new mongoose.Types.ObjectId(session!.user.companyId!)
+      const companyObjectId = new mongoose.Types.ObjectId(session!.user.companyId!);
+      const employeeMappings = await EmployeeTelegram.find({ companyId: companyObjectId })
+        .select("employeeName")
+        .lean();
+      const employeeNames = employeeMappings
+        .map((m: any) => m.employeeName)
+        .filter((n: any) => typeof n === "string" && n.trim().length > 0);
+
+      // Match logs that either:
+      // 1. Have the admin's companyId set explicitly
+      // 2. Were never stamped with a companyId (common for DeviceCallLog entries)
+      // 3. Belong to an employee mapped to this company
+      query.$or = [
+        { companyId: companyObjectId },
+        { companyId: { $exists: false } },
+        { companyId: null },
+        ...(employeeNames.length > 0 ? [{ employeeName: { $in: employeeNames } }] : []),
+      ];
     }
 
     if (driverId) {
@@ -41,23 +60,33 @@ export async function GET(req: Request) {
       if (endDate) query.timestamp.$lte = new Date(endDate);
     }
 
-    await connectToDatabase();
-    
-    // Get the total unfiltered count first
-    const totalCount = await CallLog.countDocuments(query);
+    // Get the total unfiltered count first from both collections
+    const [totalMainCount, totalDeviceCount] = await Promise.all([
+      CallLog.countDocuments(query),
+      DeviceCallLog.countDocuments(query)
+    ]);
+    const totalCount = totalMainCount + totalDeviceCount;
 
-    // Using populate to efficiently retrieve the driver's info through userId
-    const logs = await CallLog.find(query)
-      .populate({
-        path: "driverId",
-        select: "userId",
-        populate: {
-          path: "userId",
-          select: "name email",
-          model: "User"
-        }
-      })
-      .sort({ timestamp: -1 });
+    // Fetch from both collections
+    const [mainLogs, deviceLogs] = await Promise.all([
+      CallLog.find(query)
+        .populate({
+          path: "driverId",
+          select: "userId",
+          populate: {
+            path: "userId",
+            select: "name email",
+            model: "User"
+          }
+        })
+        .lean(),
+      DeviceCallLog.find(query).lean()
+    ]);
+
+    // Merge and sort
+    const logs = [...mainLogs, ...deviceLogs].sort((a: any, b: any) => 
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
 
     return NextResponse.json({ logs, totalCount });
   } catch (error) {

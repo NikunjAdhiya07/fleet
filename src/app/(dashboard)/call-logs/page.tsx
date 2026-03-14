@@ -13,13 +13,37 @@ import { DateRange } from "react-day-picker";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Info } from "lucide-react";
 import {
-  BarChart,
+  ComposedChart,
+  Line,
   Bar,
   XAxis,
   YAxis,
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
+  LabelList,
 } from "recharts";
+
+const GraphSkeleton = () => (
+  <div className="w-full h-full flex flex-col items-center justify-end pt-8 pb-4 px-2 sm:px-6">
+    <div className="flex items-end justify-between w-full h-[80%] gap-1.5 sm:gap-2 px-1 border-b border-slate-800/60 pb-1">
+      {[40, 70, 45, 90, 65, 30, 80, 50, 60, 35, 75, 40].map((h, i) => (
+        <div key={i} className="w-full bg-slate-800/30 rounded-t flex flex-col justify-end overflow-hidden" style={{ height: `${h}%` }}>
+          <div 
+            className="w-full bg-indigo-500/20 rounded-t animate-pulse" 
+            style={{ height: '100%', animationDelay: `${i * 0.1}s`, animationDuration: '1.5s' }} 
+          />
+        </div>
+      ))}
+    </div>
+    <div className="w-full mt-8 flex justify-center items-center gap-3">
+        <div className="relative flex h-2.5 w-2.5">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-500"></span>
+        </div>
+        <span className="text-sm text-slate-400 font-medium">Crunching the latest call data...</span>
+    </div>
+  </div>
+);
 
 export default function CallLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
@@ -134,15 +158,61 @@ export default function CallLogsPage() {
   }, [employeeNames]);
 
   const getEmployeeName = (log: any) =>
-    log.employeeName || log.driverId?.userId?.name || "Unknown Employee";
+    log.employeeName || log.driverId?.userId?.name || "Unknown";
 
-  const filteredLogs = logs.filter((log) => {
+  const rawFilteredLogs = logs.filter((log) => {
     const matchesSearch =
       searchQuery === "" || log.phoneNumber.includes(searchQuery);
     const matchesEmployee =
       selectedEmployee === "ALL" || getEmployeeName(log) === selectedEmployee;
     return matchesSearch && matchesEmployee;
   });
+
+  // Deduplicate logs introduced by an old Android app bug
+  const filteredLogs = useMemo(() => {
+    const uniqueLogs: any[] = [];
+    
+    // Sort raw logs descending by timestamp first so the newest in a duplicate cluster comes first
+    const sortedRaw = [...rawFilteredLogs].sort((a, b) => {
+      const timeA = new Date(a.timestamp).getTime();
+      const timeB = new Date(b.timestamp).getTime();
+      return timeB - timeA;
+    });
+
+    sortedRaw.forEach(log => {
+      if (!log.timestamp) {
+        uniqueLogs.push(log);
+        return;
+      }
+      
+      const logTime = new Date(log.timestamp).getTime();
+      const emp = getEmployeeName(log);
+      
+      // Check if this log matches an existing one in our unique array
+      const isDuplicate = uniqueLogs.some(existing => {
+        if (existing.phoneNumber !== log.phoneNumber || 
+            existing.callType !== log.callType || 
+            getEmployeeName(existing) !== emp) {
+          return false;
+        }
+        
+        // Time difference within 5 minutes (300000 ms) since some syncs got super delayed
+        const existingTime = new Date(existing.timestamp).getTime();
+        const isTimeClose = Math.abs(existingTime - logTime) < 300000;
+        
+        // Duration difference within 30 seconds
+        const isDurationClose = Math.abs(existing.duration - log.duration) <= 30;
+        
+        return isTimeClose && isDurationClose;
+      });
+
+      if (!isDuplicate) {
+        uniqueLogs.push(log);
+      }
+    });
+
+    return uniqueLogs;
+  }, [rawFilteredLogs]);
 
   useEffect(() => {
     if (filteredLogs.length > 0) {
@@ -159,19 +229,19 @@ export default function CallLogsPage() {
   const CallTypeBadge = ({ callType, className }: { callType: string; className?: string }) => {
     if (callType === "INCOMING")
       return (
-        <Badge className={cn("bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 gap-1", className)}>
+        <Badge className={cn("bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 gap-1.5 rounded-full px-1.5 py-0.5", className)}>
           <PhoneIncoming className="w-3.5 h-3.5" /> Incoming
         </Badge>
       );
     if (callType === "OUTGOING")
       return (
-        <Badge className={cn("bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-sky-500/20 gap-1", className)}>
+        <Badge className={cn("bg-sky-500/10 text-sky-400 hover:bg-sky-500/20 border border-sky-500/20 gap-1.5 rounded-full px-2.5 py-1", className)}>
           <PhoneOutgoing className="w-3.5 h-3.5" /> Outgoing
         </Badge>
       );
     if (callType === "MISSED")
       return (
-        <Badge className={cn("bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 gap-1", className)}>
+        <Badge className={cn("bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 gap-1.5 rounded-full px-2.5 py-1", className)}>
           <PhoneMissed className="w-3.5 h-3.5" /> Missed
         </Badge>
       );
@@ -219,6 +289,8 @@ export default function CallLogsPage() {
       bucket.total += 1;
     });
 
+    // Only keep buckets that actually have calls so the x-axis
+    // shows only hours with activity (no empty columns).
     return base.filter((b) => b.total > 0);
   }, [filteredLogs, timeBuckets]);
 
@@ -409,8 +481,8 @@ export default function CallLogsPage() {
 
       {/* Call Activity Graph */}
       <Card className="bg-slate-900 border-slate-800 text-slate-100 relative z-10">
-        <div className="p-4 sm:p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <div className="p-5 sm:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-5">
             <div className="space-y-0.5">
               <p className="text-sm font-medium text-slate-200">Call Activity by Hour</p>
               <p className="text-xs text-slate-500">
@@ -419,28 +491,78 @@ export default function CallLogsPage() {
               </p>
             </div>
           </div>
-          <div className="h-56 sm:h-64">
-            {chartData.length > 0 ? (
+          <div className="h-72 sm:h-96 min-h-[320px]">
+            {isLoading && filteredLogs.length === 0 ? (
+              <GraphSkeleton />
+            ) : chartData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} stackOffset="none">
+                <ComposedChart
+                  data={chartData}
+                  margin={{ top: 28, right: 0, left: -20, bottom: 88 }}
+                  barCategoryGap="6%"
+                >
                   <XAxis
                     dataKey="timeRange"
                     tickLine={false}
                     axisLine={{ stroke: "#1f2937" }}
-                    tick={{ fill: "#9ca3af", fontSize: 10 }}
-                    interval={3}
+                    tick={{ fill: "#9ca3af", fontSize: 10, textAnchor: "end" }}
+                    interval={0}
+                    angle={-45}
                   />
                   <YAxis
                     allowDecimals={false}
                     tickLine={false}
                     axisLine={{ stroke: "#1f2937" }}
                     tick={{ fill: "#9ca3af", fontSize: 10 }}
+                    tickCount={10}
                   />
                   <RechartsTooltip content={<AnalyticsTooltip />} />
-                  <Bar dataKey="incoming" stackId="calls" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6" />
-                  <Bar dataKey="missed" stackId="calls" fill="#ef4444" />
-                </BarChart>
+                  <Bar dataKey="incoming" stackId="calls" fill="#22c55e">
+                    <LabelList
+                      dataKey="incoming"
+                      position="center"
+                      fill="#fff"
+                      fontSize={10}
+                      fontWeight={600}
+                      formatter={(value: any) => (value > 0 ? String(value) : "")}
+                    />
+                  </Bar>
+                  <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6">
+                    <LabelList
+                      dataKey="outgoing"
+                      position="center"
+                      fill="#fff"
+                      fontSize={10}
+                      fontWeight={600}
+                      formatter={(value: any) => (value > 0 ? String(value) : "")}
+                    />
+                  </Bar>
+                  <Bar dataKey="missed" stackId="calls" fill="#ef4444" radius={[4, 4, 0, 0]}>
+                    <LabelList
+                      dataKey="missed"
+                      position="center"
+                      fill="#fff"
+                      fontSize={10}
+                      fontWeight={600}
+                      formatter={(value: any) => (value > 0 ? String(value) : "")}
+                    />
+                  </Bar>
+                  <Line 
+                    type="monotone" 
+                    dataKey="total" 
+                    stroke="transparent" 
+                    activeDot={false} 
+                    dot={(props: any) => {
+                      const { cx, cy, payload } = props;
+                      if (!payload || payload.total === 0) return null;
+                      return (
+                        <text x={cx} y={cy - 8} fill="#e2e8f0" fontSize={11} fontWeight={600} textAnchor="middle">
+                          {payload.total}
+                        </text>
+                      );
+                    }} 
+                  />
+                </ComposedChart>
               </ResponsiveContainer>
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-slate-500">
@@ -566,85 +688,71 @@ export default function CallLogsPage() {
           ) : filteredLogs.length === 0 ? (
             <div className="text-center text-slate-500 py-16 text-sm border-t border-slate-800">No call logs found matching your filters.</div>
           ) : (
-            <div className="divide-y divide-slate-800 border-t border-slate-800">
+            <div className="divide-y divide-slate-800/50 border-t border-slate-800/50">
               {filteredLogs.map((log: any) => {
-                const isOutgoing = log.callType === "OUTGOING";
                 const employee = getEmployeeName(log);
-                const contact = log.contactName && log.contactName !== "Unknown" ? log.contactName : log.phoneNumber;
-                
-                const renderParty = (name: string, isContact: boolean) => {
-                  const showPhone = isContact && name !== log.phoneNumber;
-                  return (
-                    <div className="flex flex-col">
-                      <span className={cn("font-bold text-base sm:text-lg shrink-0", isContact ? "text-slate-300" : "text-slate-100")}>
-                        {name}
-                      </span>
-                      {showPhone && (
-                        <span className="text-[12px] text-slate-500 font-mono -mt-0.5 leading-tight tracking-tight">
-                          {log.phoneNumber}
-                        </span>
-                      )}
-                    </div>
-                  );
-                };
+                const displayContactName = log.contactName && log.contactName !== "Unknown" ? log.contactName : log.phoneNumber;
+                const logTags = tags[log.phoneNumber] || [];
+                const maxVisibleTags = 2;
+                const visibleTags = logTags.slice(0, maxVisibleTags);
+                const overflowTagCount = logTags.length - maxVisibleTags;
 
                 return (
-                  <div key={log._id} className="p-4 hover:bg-slate-800/40 transition-colors w-full">
-                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-3 w-full">
-                      {isOutgoing ? renderParty(employee, false) : renderParty(contact, true)}
-                      <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-slate-500 shrink-0 block" />
-                      {isOutgoing ? renderParty(contact, true) : renderParty(employee, false)}
-                      <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-slate-500 shrink-0 block" />
-                      <CallTypeBadge callType={log.callType} className="text-xs sm:text-sm px-1.5 sm:px-2.5 py-0.5 shrink-0" />
-                      
-                      {/* Mobile Info Button for Tags */}
-                      {tags[log.phoneNumber] && tags[log.phoneNumber].length > 0 && (
-                        <button
-                           onClick={(e) => {
-                             e.stopPropagation();
-                             setSelectedPhoneForTags(log.phoneNumber);
-                             setIsTagModalOpen(true);
-                           }}
-                           className="ml-auto p-1.5 rounded-full hover:bg-slate-800 text-slate-400 transition-colors"
-                        >
-                          <Info className="w-4 h-4" />
-                        </button>
-                      )}
+                  <div key={log._id} className="p-2.5 hover:bg-slate-800/40 transition-colors w-full flex flex-col gap-1 min-h-0">
+                    {/* Row 1: Contact · Employee (single line) + Badge + Duration */}
+                    <div className="flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-sm font-semibold text-white truncate flex-1 min-w-0">
+                        {displayContactName}
+                        <span className="text-slate-500 font-normal"> · {employee}</span>
+                      </span>
+                      <span className="flex items-center gap-1.5 shrink-0">
+                        <CallTypeBadge callType={log.callType} className="border-0 text-[10px] px-1.5 py-0.5 font-medium" />
+                        <span className="text-[11px] text-slate-400 font-medium tabular-nums">{formatDuration(log.duration)}</span>
+                      </span>
                     </div>
-                    
-                    <div className="flex items-center justify-between bg-slate-900/60 p-3.5 rounded-lg border border-slate-700/50">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-slate-500 text-xs uppercase tracking-wider font-semibold">Duration</span>
-                        <span className={cn(
-                          "text-base font-bold",
-                          log.callType === "MISSED" ? "text-rose-400" :
-                          log.duration >= 300 ? "text-emerald-400" : "text-slate-100"
-                        )}>
-                          {formatDuration(log.duration)}
-                        </span>
-                      </div>
-                      <div className="flex flex-col gap-1 items-end">
-                        <span className="text-slate-500 text-xs uppercase tracking-wider font-semibold">Date & Time</span>
-                        <div className="flex flex-col items-end sm:flex-row sm:gap-2">
-                          <span className={cn(
-                            "text-base font-bold",
-                            log.callType === "MISSED" ? "text-rose-400" : "text-slate-100"
-                          )}>
-                            {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
-                              ? format(new Date(log.timestamp), "MMM dd, yyyy")
-                              : "N/A"}
-                          </span>
-                          <span className={cn(
-                            "text-sm font-semibold",
-                            log.callType === "MISSED" ? "text-rose-500/80" : "text-slate-400"
-                          )}>
-                            {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
-                              ? format(new Date(log.timestamp), "hh:mm a")
-                              : ""}
-                          </span>
+                    {/* Row 2: Phone + Date (single line) */}
+                    <div className="flex items-center justify-between gap-2 min-w-0">
+                      <span className="text-xs font-medium text-slate-300 font-mono truncate min-w-0">{log.phoneNumber}</span>
+                      <span className="text-sm text-slate-400 shrink-0 font-medium">
+                        {log.timestamp && !isNaN(new Date(log.timestamp).getTime())
+                          ? format(new Date(log.timestamp), "MMM d · HH:mm")
+                          : "N/A"}
+                      </span>
+                    </div>
+                    {/* Row 3: Tags in one row, overflow as +N — tap to open tag modal */}
+                    {logTags.length > 0 && (
+                      <div className="flex items-center gap-1 overflow-hidden min-w-0">
+                        <div className="flex items-center gap-1 min-w-0 overflow-hidden">
+                          {visibleTags.map((t: any, idx: number) => (
+                            <button
+                              type="button"
+                              key={idx}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedPhoneForTags(log.phoneNumber);
+                                setIsTagModalOpen(true);
+                              }}
+                              className="text-[10px] px-1.5 py-0.5 border border-slate-700 bg-slate-900/50 text-slate-400 hover:bg-slate-800 transition-colors rounded-full whitespace-nowrap shrink-0"
+                            >
+                              {t.name}
+                            </button>
+                          ))}
+                          {overflowTagCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedPhoneForTags(log.phoneNumber);
+                                setIsTagModalOpen(true);
+                              }}
+                              className="text-[10px] px-1.5 py-0.5 border border-slate-600 bg-slate-800/60 text-slate-400 hover:bg-slate-800 rounded-full shrink-0 font-medium"
+                            >
+                              +{overflowTagCount}
+                            </button>
+                          )}
                         </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 );
               })}
