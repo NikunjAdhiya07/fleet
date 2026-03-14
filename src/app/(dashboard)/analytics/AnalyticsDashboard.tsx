@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import {
   PieChart,
@@ -16,8 +16,13 @@ import {
   Legend
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { PhoneCall, Clock, CheckCircle2, AlertCircle, PhoneIncoming, PhoneOutgoing, PhoneMissed, Phone, Flame, Trophy, LineChart, User, Calendar } from "lucide-react";
+import { PhoneCall, Clock, CheckCircle2, AlertCircle, PhoneIncoming, PhoneOutgoing, PhoneMissed, Phone, Flame, Trophy, LineChart, User, Calendar as CalendarIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { DateRange } from "react-day-picker";
+import { format } from "date-fns";
+import { Button } from "@/components/ui/button";
 
 // --- Types ---
 interface EmployeeStat {
@@ -27,6 +32,9 @@ interface EmployeeStat {
   totalDuration: number; // in seconds
   avgDuration: number; // in seconds
   missedCalls: number;
+  callBacked?: number;      // missed calls that were called back (outgoing within 24h)
+  clientCalledBack?: number; // missed calls where client called again and was received
+  resolvedMissed?: number;   // missed calls resolved by either callback or client callback
 }
 
 interface CallType {
@@ -60,6 +68,7 @@ interface AnalyticsDashboardProps {
   bestCallTimes: BestCallTime[];
   repeatCallers: RepeatCaller[];
   currentRange: string;
+  missedResolutionComputed?: boolean;
 }
 
 // Format duration helper (e.g., 65 -> 1m 5s)
@@ -92,6 +101,7 @@ export default function AnalyticsDashboard({
   bestCallTimes,
   repeatCallers,
   currentRange,
+  missedResolutionComputed = false,
 }: AnalyticsDashboardProps) {
   
   const [selectedEmployee, setSelectedEmployee] = useState<string>("ALL");
@@ -106,16 +116,47 @@ export default function AnalyticsDashboard({
     router.push(`${pathname}?${params.toString()}`);
   };
 
-  const rangeLabel = useMemo(() => {
-    switch(currentRange) {
-      case 'this_hour': return 'This Hour';
-      case 'today': return 'Today';
-      case 'this_month': return 'This Month';
-      case 'last_month': return 'Last Month';
-      case 'all_time': return 'All Time';
-      default: return 'Today';
+  const customStart = searchParams.get("startDate");
+  const customEnd = searchParams.get("endDate");
+  const [customDateRange, setCustomDateRange] = useState<DateRange | undefined>(() => {
+    if (currentRange === "custom" && customStart && customEnd) {
+      return { from: new Date(customStart), to: new Date(customEnd) };
     }
-  }, [currentRange]);
+    return undefined;
+  });
+  const [customPickerOpen, setCustomPickerOpen] = useState(false);
+
+  useEffect(() => {
+    if (currentRange === "custom" && customStart && customEnd) {
+      setCustomDateRange({ from: new Date(customStart), to: new Date(customEnd) });
+    }
+  }, [currentRange, customStart, customEnd]);
+
+  const rangeLabel = useMemo(() => {
+    if (currentRange === "custom" && customStart && customEnd) {
+      try {
+        const from = format(new Date(customStart), "MMM d, yyyy");
+        const to = format(new Date(customEnd), "MMM d, yyyy");
+        return from === to ? from : `${from} – ${to}`;
+      } catch {
+        return "Custom range";
+      }
+    }
+    switch (currentRange) {
+      case "this_hour": return "This Hour";
+      case "today": return "Today";
+      case "yesterday": return "Yesterday";
+      case "last_7_days": return "Last 7 Days";
+      case "last_30_days": return "Last 30 Days";
+      case "this_week": return "This Week";
+      case "last_week": return "Last Week";
+      case "this_month": return "This Month";
+      case "last_month": return "Last Month";
+      case "custom": return "Custom range";
+      case "all_time": return "All Time";
+      default: return "Today";
+    }
+  }, [currentRange, customStart, customEnd]);
 
   // Derive unique employee names — prefer allEmployees (everyone in company) but fall back to stats-derived list
   const employeeNames = useMemo(() => {
@@ -215,22 +256,115 @@ export default function AnalyticsDashboard({
         </div>
 
         {/* Date Range Filter */}
-        <div className="min-w-[200px]">
-          <div className="flex items-center gap-2 mb-3">
-            <Calendar className="h-4 w-4 text-slate-300" />
+        <div className="flex flex-col gap-3 min-w-0 sm:min-w-[240px]">
+          <div className="flex items-center gap-2">
+            <CalendarIcon className="h-4 w-4 text-slate-300 shrink-0" />
             <span className="text-sm font-bold text-slate-200">Date Range</span>
           </div>
-          <select 
-            value={currentRange}
-            onChange={handleRangeChange}
-            className="w-full bg-slate-800 border-none text-slate-200 text-sm rounded-lg px-4 py-2.5 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer font-medium"
-          >
-            <option value="this_hour">This Hour</option>
-            <option value="today">Today</option>
-            <option value="this_month">This Month</option>
-            <option value="last_month">Last Month</option>
-            <option value="all_time">All Time</option>
-          </select>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <select
+              value={currentRange}
+              onChange={(e) => {
+                const v = e.target.value;
+                const params = new URLSearchParams(searchParams.toString());
+                if (v !== "custom") {
+                  setCustomPickerOpen(false);
+                  params.set("range", v);
+                  params.delete("startDate");
+                  params.delete("endDate");
+                  router.push(`${pathname}?${params.toString()}`);
+                } else {
+                  params.set("range", "custom");
+                  router.push(`${pathname}?${params.toString()}`);
+                  setCustomPickerOpen(true);
+                }
+              }}
+              className="flex-1 min-w-0 bg-slate-800 border border-slate-700 text-slate-200 text-sm rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer font-medium"
+            >
+              <optgroup label="Quick">
+                <option value="this_hour">This Hour</option>
+                <option value="today">Today</option>
+                <option value="yesterday">Yesterday</option>
+              </optgroup>
+              <optgroup label="Week">
+                <option value="this_week">This Week</option>
+                <option value="last_week">Last Week</option>
+                <option value="last_7_days">Last 7 Days</option>
+              </optgroup>
+              <optgroup label="Month">
+                <option value="this_month">This Month</option>
+                <option value="last_month">Last Month</option>
+                <option value="last_30_days">Last 30 Days</option>
+              </optgroup>
+              <optgroup label="Other">
+                <option value="custom">Custom range…</option>
+                <option value="all_time">All Time</option>
+              </optgroup>
+            </select>
+            {currentRange === "custom" && (
+              <Popover open={customPickerOpen} onOpenChange={setCustomPickerOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "justify-start text-left font-normal bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700 hover:text-white",
+                      !customDateRange?.from && "text-slate-500"
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {customDateRange?.from ? (
+                      customDateRange.to ? (
+                        <>
+                          {format(customDateRange.from, "MMM d, yyyy")} – {format(customDateRange.to, "MMM d, yyyy")}
+                        </>
+                      ) : (
+                        format(customDateRange.from, "MMM d, yyyy")
+                      )
+                    ) : (
+                      "Pick dates"
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0 border-slate-800 bg-slate-950" align="end">
+                  <Calendar
+                    mode="range"
+                    defaultMonth={customDateRange?.from ?? new Date()}
+                    selected={customDateRange}
+                    onSelect={setCustomDateRange}
+                    numberOfMonths={2}
+                    className="text-white border-0 rounded-lg"
+                  />
+                  <div className="flex items-center justify-end gap-2 p-3 border-t border-slate-800">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-slate-400 hover:text-white"
+                      onClick={() => setCustomPickerOpen(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="bg-indigo-600 hover:bg-indigo-700"
+                      disabled={!customDateRange?.from}
+                      onClick={() => {
+                        if (customDateRange?.from) {
+                          const params = new URLSearchParams(searchParams.toString());
+                          params.set("range", "custom");
+                          params.set("startDate", customDateRange.from.toISOString().slice(0, 10));
+                          params.set("endDate", (customDateRange.to ?? customDateRange.from).toISOString().slice(0, 10));
+                          router.push(`${pathname}?${params.toString()}`);
+                          setCustomPickerOpen(false);
+                        }
+                      }}
+                    >
+                      Apply
+                    </Button>
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+          </div>
         </div>
       </div>
       
@@ -521,20 +655,45 @@ export default function AnalyticsDashboard({
           <Card className="bg-slate-900 border-slate-800">
             <CardHeader>
               <CardTitle className="text-slate-100">7. Missed Call Performance</CardTitle>
+              <CardDescription className="text-slate-400">
+                Missed calls and how many were resolved (call-backed or client called back within 24h)
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 {filteredEmployeeStats.map(emp => {
                   const missRate = emp.totalCalls > 0 ? (emp.missedCalls / emp.totalCalls) * 100 : 0;
+                  const callBacked = emp.callBacked ?? 0;
+                  const clientCalledBack = emp.clientCalledBack ?? 0;
+                  const resolvedMissed = emp.resolvedMissed ?? 0;
+                  const unresolvedMissed = emp.missedCalls - resolvedMissed;
                   return (
-                    <div key={'missed-' + emp.driverId} className="flex items-center justify-between border-b border-slate-800 pb-2 last:border-0 last:pb-0">
-                      <div>
-                        <div className="text-sm font-bold text-white">{emp.employeeName}</div>
-                        <div className="text-xs text-slate-400 font-medium">{emp.missedCalls} Missed</div>
+                    <div key={'missed-' + emp.driverId} className="border-b border-slate-800 pb-3 last:border-0 last:pb-0">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm font-bold text-white">{emp.employeeName}</div>
+                          <div className="text-xs text-slate-400 font-medium">{emp.missedCalls} Missed</div>
+                        </div>
+                        <div className={cn("text-sm font-bold", missRate > 10 ? "text-rose-500" : "text-emerald-500")}>
+                          {missRate.toFixed(1)}% Rate
+                        </div>
                       </div>
-                      <div className={cn("text-sm font-bold", missRate > 10 ? "text-rose-500" : "text-emerald-500")}>
-                        {missRate.toFixed(1)}% Rate
-                      </div>
+                      {missedResolutionComputed && emp.missedCalls > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                          {callBacked > 0 && (
+                            <span className="text-emerald-400">Call-backed: {callBacked}</span>
+                          )}
+                          {clientCalledBack > 0 && (
+                            <span className="text-sky-400">Client called back: {clientCalledBack}</span>
+                          )}
+                          {resolvedMissed > 0 && (
+                            <span className="text-slate-300">Resolved: {resolvedMissed}</span>
+                          )}
+                          {unresolvedMissed > 0 && (
+                            <span className="text-rose-400 font-medium">Unresolved: {unresolvedMissed}</span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

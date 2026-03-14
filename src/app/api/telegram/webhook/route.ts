@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import mongoose from "mongoose";
 import connectToDatabase from "@/lib/db";
 import IdentifiedContact from "@/models/IdentifiedContact";
 import UnknownNumberTracker from "@/models/UnknownNumberTracker";
 import EmployeeTelegram from "@/models/EmployeeTelegram";
+import DeviceCallLog from "@/models/DeviceCallLog";
+import CallLog from "@/models/CallLog";
 import {
   answerCallbackQuery,
   editMessageText,
@@ -22,6 +25,33 @@ function isValidRequest(req: Request): boolean {
     return false;
   }
   return true;
+}
+
+/** Resolve companyId for an employee from call logs (for legacy EmployeeTelegram records missing companyId). */
+async function resolveCompanyIdForEmployee(
+  _phoneNumber: string,
+  employeeName: string
+): Promise<mongoose.Types.ObjectId | null> {
+  // DeviceCallLog: employeeName is who made/received the call; phoneNumber there is the contact's number
+  const fromDevice = await DeviceCallLog.findOne({
+    employeeName,
+    companyId: { $exists: true, $ne: null },
+  })
+    .select("companyId")
+    .lean();
+
+  if (fromDevice?.companyId) return fromDevice.companyId as mongoose.Types.ObjectId;
+
+  const fromCallLog = await CallLog.findOne({
+    employeeName,
+    companyId: { $exists: true, $ne: null },
+  })
+    .select("companyId")
+    .lean();
+
+  if (fromCallLog?.companyId) return fromCallLog.companyId as mongoose.Types.ObjectId;
+
+  return null;
 }
 
 export async function POST(req: Request) {
@@ -247,6 +277,25 @@ async function handleMessage(message: any) {
         );
       }
       return;
+    }
+
+    // Ensure companyId is set (required by schema); resolve from call logs if missing (e.g. legacy records)
+    if (!employee.companyId) {
+      const resolved = await resolveCompanyIdForEmployee(digitsOnly, employee.employeeName);
+      if (resolved) {
+        employee.companyId = resolved;
+      } else {
+        const defaultId = process.env.DEFAULT_COMPANY_ID;
+        if (defaultId && mongoose.Types.ObjectId.isValid(defaultId)) {
+          employee.companyId = new mongoose.Types.ObjectId(defaultId);
+        } else {
+          await sendMessage(
+            chatId,
+            `❌ <b>Could not complete registration.</b>\n\nYour number is in the system but company could not be determined. Please ask your administrator to add you from the <b>Telegram Setup</b> page in the dashboard, then try again.`
+          );
+          return;
+        }
+      }
     }
 
     employee.telegramChatId = String(chatId);

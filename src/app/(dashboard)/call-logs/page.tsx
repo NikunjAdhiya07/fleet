@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Search, Loader2, Calendar as CalendarIcon, User, ArrowRight } from "lucide-react";
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Search, Loader2, Calendar as CalendarIcon, User, ArrowRight, ArrowLeftRight, Plus } from "lucide-react";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,7 @@ import {
   ResponsiveContainer,
   LabelList,
 } from "recharts";
+import ComparisonPanel from "./ComparisonPanel";
 
 const GraphSkeleton = () => (
   <div className="w-full h-full flex flex-col items-center justify-end pt-8 pb-4 px-2 sm:px-6">
@@ -59,6 +60,32 @@ export default function CallLogsPage() {
   const [selectedPhoneForTags, setSelectedPhoneForTags] = useState<string | null>(null);
   const [isFetchingTags, setIsFetchingTags] = useState(false);
   const logsRef = useRef<HTMLDivElement>(null);
+  const [comparisonMode, setComparisonMode] = useState(false);
+  const [comparisonPanels, setComparisonPanels] = useState<
+    Array<{ id: string; dateFilter: "TODAY" | "YESTERDAY" | "CUSTOM" }>
+  >([]);
+
+  const toggleComparisonMode = () => {
+    if (!comparisonMode) {
+      setComparisonPanels([
+        { id: "panel-a", dateFilter: "TODAY" },
+        { id: "panel-b", dateFilter: "YESTERDAY" },
+      ]);
+    }
+    setComparisonMode(!comparisonMode);
+  };
+
+  const addComparisonPanel = () => {
+    if (comparisonPanels.length >= 4) return;
+    setComparisonPanels((prev) => [
+      ...prev,
+      { id: `panel-${Date.now()}`, dateFilter: "TODAY" },
+    ]);
+  };
+
+  const removeComparisonPanel = (id: string) => {
+    setComparisonPanels((prev) => prev.filter((p) => p.id !== id));
+  };
 
   const scrollToLogs = () => {
     // Only auto-scroll on small (mobile) screens
@@ -480,6 +507,7 @@ export default function CallLogsPage() {
       </div>
 
       {/* Call Activity Graph */}
+      {!comparisonMode && (
       <Card className="bg-slate-900 border-slate-800 text-slate-100 relative z-10">
         <div className="p-5 sm:p-6">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-5">
@@ -490,6 +518,18 @@ export default function CallLogsPage() {
                 {chartData.length > 0 ? "Stacked by call type" : "No calls in selected range"}
               </p>
             </div>
+            <button
+              onClick={toggleComparisonMode}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200",
+                comparisonMode
+                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/25"
+                  : "bg-slate-800 text-slate-300 hover:bg-indigo-600 hover:text-white"
+              )}
+            >
+              <ArrowLeftRight className="w-3.5 h-3.5" />
+              {comparisonMode ? "Exit Compare" : "Compare"}
+            </button>
           </div>
           <div className="h-72 sm:h-96 min-h-[320px]">
             {isLoading && filteredLogs.length === 0 ? (
@@ -572,6 +612,51 @@ export default function CallLogsPage() {
           </div>
         </div>
       </Card>
+      )}
+
+      {/* Comparison Mode */}
+      {comparisonMode && (
+        <div className="space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <ArrowLeftRight className="w-4 h-4 text-indigo-400" />
+                <span className="text-sm font-semibold text-slate-200">Comparison Mode</span>
+                <span className="text-xs text-slate-500">· {comparisonPanels.length} panels</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {comparisonPanels.length < 4 && (
+                  <button
+                    onClick={addComparisonPanel}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Panel
+                  </button>
+                )}
+                <button
+                  onClick={toggleComparisonMode}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 transition-colors"
+                >
+                  Exit Compare
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {comparisonPanels.map((panel, index) => (
+              <ComparisonPanel
+                key={panel.id}
+                panelIndex={index}
+                initialDateFilter={panel.dateFilter}
+                onRemove={() => removeComparisonPanel(panel.id)}
+                canRemove={comparisonPanels.length > 2}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filters & Search */}
       <div ref={logsRef} className="scroll-mt-4">

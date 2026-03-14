@@ -24,6 +24,8 @@ export default async function AnalyticsPage({
 
   // Determine date range
   const range = (searchParams?.range as string) || "today";
+  const startParam = searchParams?.startDate as string | undefined;
+  const endParam = searchParams?.endDate as string | undefined;
   let startDate: Date | null = null;
   let endDate: Date | null = null;
   const now = new Date();
@@ -41,6 +43,50 @@ export default async function AnalyticsPage({
       endDate = new Date(now);
       endDate.setHours(23, 59, 59, 999);
       break;
+    case "yesterday": {
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      startDate = new Date(yesterday);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(yesterday);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    }
+    case "last_7_days":
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 6);
+      startDate.setHours(0, 0, 0, 0);
+      break;
+    case "last_30_days":
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      startDate = new Date(now);
+      startDate.setDate(startDate.getDate() - 29);
+      startDate.setHours(0, 0, 0, 0);
+      break;
+    case "this_week": {
+      const day = now.getDay();
+      const mondayOffset = day === 0 ? -6 : 1 - day;
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() + mondayOffset);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    }
+    case "last_week": {
+      const day = now.getDay();
+      const mondayOffset = day === 0 ? -6 : 1 - day;
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() + mondayOffset - 7);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 6);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    }
     case "this_month":
       startDate = new Date(now.getFullYear(), now.getMonth(), 1);
       endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
@@ -48,6 +94,13 @@ export default async function AnalyticsPage({
     case "last_month":
       startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
       endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+      break;
+    case "custom":
+      if (startParam && endParam) {
+        startDate = new Date(startParam);
+        endDate = new Date(endParam);
+        endDate.setHours(23, 59, 59, 999);
+      }
       break;
     case "all_time":
     default:
@@ -272,6 +325,81 @@ export default async function AnalyticsPage({
     totalDuration: caller.totalDuration as number,
   }));
 
+  // ── Missed call resolution: call-backed & client-called-back (within 24h) ──
+  const missedResolutionByEmployee: Record<string, { callBacked: number; clientCalledBack: number; resolved: number }> = {};
+  if (startDate && endDate) {
+    const endDateExtended = new Date(endDate.getTime() + 24 * 60 * 60 * 1000);
+    const dateQueryExtended = {
+      ...companyFilter,
+      timestamp: { $gte: startDate, $lte: endDateExtended },
+    };
+    const rawLogs = await CallLog.aggregate([
+      { $match: dateQueryExtended },
+      { $project: { driverId: 1, employeeName: 1, phoneNumber: 1, callType: 1, timestamp: 1 } },
+      { $lookup: { from: "drivers", localField: "driverId", foreignField: "_id", as: "driver" } },
+      { $unwind: { path: "$driver", preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "driver.userId",
+          foreignField: "_id",
+          as: "user",
+        },
+      },
+      {
+        $project: {
+          phoneNumber: 1,
+          callType: 1,
+          timestamp: 1,
+          employeeName: {
+            $ifNull: ["$employeeName", { $arrayElemAt: ["$user.name", 0] }],
+          },
+        },
+      },
+    ]);
+    const allLogs = rawLogs.map((r: any) => ({
+      phoneNumber: String(r.phoneNumber),
+      employeeName: r.employeeName ? String(r.employeeName) : "Unknown",
+      callType: r.callType,
+      timestamp: new Date(r.timestamp),
+    }));
+    const missedInRange = allLogs.filter(
+      (l) =>
+        l.callType === "MISSED" &&
+        l.timestamp >= startDate &&
+        l.timestamp <= endDate
+    );
+    for (const missed of missedInRange) {
+      const windowEnd = new Date(missed.timestamp.getTime() + 24 * 60 * 60 * 1000);
+      const followUps = allLogs.filter(
+        (l) =>
+          l.phoneNumber === missed.phoneNumber &&
+          l.employeeName === missed.employeeName &&
+          l.timestamp > missed.timestamp &&
+          l.timestamp <= windowEnd &&
+          (l.callType === "OUTGOING" || l.callType === "INCOMING")
+      );
+      const callBacked = followUps.some((f) => f.callType === "OUTGOING");
+      const clientCalledBack = followUps.some((f) => f.callType === "INCOMING");
+      const resolved = callBacked || clientCalledBack;
+      const name = missed.employeeName;
+      if (!missedResolutionByEmployee[name]) {
+        missedResolutionByEmployee[name] = { callBacked: 0, clientCalledBack: 0, resolved: 0 };
+      }
+      if (callBacked) missedResolutionByEmployee[name].callBacked += 1;
+      if (clientCalledBack) missedResolutionByEmployee[name].clientCalledBack += 1;
+      if (resolved) missedResolutionByEmployee[name].resolved += 1;
+    }
+  }
+
+  // Merge resolution counts into employee stats
+  const employeeStatsWithResolution = employeeStats.map((emp) => ({
+    ...emp,
+    callBacked: missedResolutionByEmployee[emp.employeeName]?.callBacked ?? 0,
+    clientCalledBack: missedResolutionByEmployee[emp.employeeName]?.clientCalledBack ?? 0,
+    resolvedMissed: missedResolutionByEmployee[emp.employeeName]?.resolved ?? 0,
+  }));
+
   return (
     <div className="space-y-6">
       <div>
@@ -280,12 +408,13 @@ export default async function AnalyticsPage({
       </div>
 
       <AnalyticsDashboard
-        employeeStats={employeeStats}
+        employeeStats={employeeStatsWithResolution}
         allEmployees={allEmployees}
         callTypes={callTypes}
         bestCallTimes={bestCallTimes}
         repeatCallers={repeatCallers}
         currentRange={range}
+        missedResolutionComputed={!!(startDate && endDate)}
       />
     </div>
   );
