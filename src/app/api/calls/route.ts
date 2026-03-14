@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import connectToDatabase from "@/lib/db";
 import DeviceCallLog from "@/models/DeviceCallLog";
-import EmployeeTelegram from "@/models/EmployeeTelegram";
 import BotLog from "@/models/BotLog";
 import { runContactIntelligence } from "@/lib/contactIntelligence";
 import mongoose from "mongoose";
@@ -32,10 +31,6 @@ export async function POST(req: Request) {
 
     await connectToDatabase();
 
-    // Look up companyId for this employee
-    const empMapping = await EmployeeTelegram.findOne({ employeeName: employeeName || "Unknown" });
-    const companyId = empMapping?.companyId;
-
     const callLog = await DeviceCallLog.create({
       phoneNumber,
       contactName: contactName || "Unknown",
@@ -44,7 +39,6 @@ export async function POST(req: Request) {
       timestamp: timestamp ? new Date(Number(timestamp)) : new Date(),
       deviceId,
       employeeName: employeeName || "Unknown",
-      companyId, // Propagate companyId
       syncedAt: new Date(),
     });
 

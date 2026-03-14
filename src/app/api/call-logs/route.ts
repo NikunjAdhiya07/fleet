@@ -26,7 +26,7 @@ export async function GET(req: Request) {
     const query: any = {};
     if (session!.user.role !== "super_admin") {
       const companyObjectId = new mongoose.Types.ObjectId(session!.user.companyId!);
-      const employeeMappings = await EmployeeTelegram.find({ companyId: companyObjectId })
+      const employeeMappings = await EmployeeTelegram.find()
         .select("employeeName")
         .lean();
       const employeeNames = employeeMappings
@@ -36,7 +36,7 @@ export async function GET(req: Request) {
       // Match logs that either:
       // 1. Have the admin's companyId set explicitly
       // 2. Were never stamped with a companyId (common for DeviceCallLog entries)
-      // 3. Belong to an employee mapped to this company
+      // 3. Belong to an employee in the Telegram setup (any)
       query.$or = [
         { companyId: companyObjectId },
         { companyId: { $exists: false } },

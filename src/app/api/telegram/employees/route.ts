@@ -147,7 +147,6 @@ export async function POST(req: Request) {
   }
 
   // Upsert — create or update phone number (reset telegram link only if changing number)
-  const companyId = session.user.role === "super_admin" ? (body as any).companyId : session.user.companyId;
   const existing = await EmployeeTelegram.findOne({ employeeName });
   let mapping;
   if (existing) {
@@ -157,21 +156,13 @@ export async function POST(req: Request) {
       existing.telegramChatId = null;
       existing.registeredAt = null;
     }
-    // Update companyId if it was missing (for migration)
-    if (!existing.companyId && companyId) {
-      existing.companyId = new mongoose.Types.ObjectId(companyId);
-    }
     mapping = await existing.save();
   } else {
-    if (!companyId) {
-      return NextResponse.json({ error: "companyId is required for new employees" }, { status: 400 });
-    }
     mapping = await EmployeeTelegram.create({
       employeeName,
       phoneNumber: digits,
       telegramChatId: null,
       registeredAt: null,
-      companyId: new mongoose.Types.ObjectId(companyId),
     });
   }
 

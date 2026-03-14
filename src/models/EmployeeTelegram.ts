@@ -5,7 +5,6 @@ export interface IEmployeeTelegram extends Document {
   phoneNumber: string;       // employee's own phone number used for self-registration verification
   telegramChatId?: string;   // set when employee registers via /start
   registeredAt?: Date;       // when the employee linked their Telegram
-  companyId: mongoose.Types.ObjectId;
 }
 
 const EmployeeTelegramSchema = new Schema(
@@ -14,7 +13,6 @@ const EmployeeTelegramSchema = new Schema(
     phoneNumber: { type: String, required: true, unique: true },
     telegramChatId: { type: String, default: null },
     registeredAt: { type: Date, default: null },
-    companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true },
   },
   { timestamps: true }
 );
