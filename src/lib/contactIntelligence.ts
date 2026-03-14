@@ -29,6 +29,10 @@ import {
 
 const CALL_THRESHOLD = 5;
 
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function log(
   level: 'info' | 'warn' | 'error' | 'success',
   step: string,
@@ -56,8 +60,8 @@ export async function runContactIntelligence(
 
     await log('info', 'START', `Intelligence triggered`, { phoneNumber, contactName, employeeName, deviceId }, employeeName, phoneNumber);
 
-    // ── Fetch the employee's Telegram chat ID ──────────────────────────────
-    const empTelegram = await EmployeeTelegram.findOne({ employeeName }).lean() as any;
+    // ── Fetch the employee's Telegram chat ID (case-insensitive match) ───────
+    const empTelegram = await EmployeeTelegram.findOne({ employeeName: new RegExp(`^${escapeRegex(employeeName)}$`, 'i') }).lean() as any;
     const chatId: string | null = empTelegram?.telegramChatId ?? null;
 
     await log(
@@ -103,12 +107,7 @@ export async function runContactIntelligence(
       const name = phoneContactName;
       await log('info', 'SCENARIO_A', `Scenario A — known contact: "${name}"`, undefined, employeeName, phoneNumber);
 
-      // Guard: if already sent category request (IdentifiedContact with name exists), skip
-      if (identified?.contactName) {
-        await log('info', 'SKIP_ALREADY_SENT', `Category request already sent previously for "${name}" — skipping duplicate`, undefined, employeeName, phoneNumber);
-        return;
-      }
-
+      // Create IdentifiedContact if not exists (so we always have a record to attach category to)
       if (!identified) {
         await IdentifiedContact.create({
           phoneNumber,
@@ -120,6 +119,7 @@ export async function runContactIntelligence(
         await log('info', 'IDENTIFIED_CREATED', `Created IdentifiedContact for "${name}"`, undefined, employeeName, phoneNumber);
       }
 
+      // Send category request whenever we have name but no category yet (automatic + retries when Telegram linked later)
       if (chatId) {
         await log('info', 'SENDING_CATEGORY', `Sending category keyboard to chatId ${chatId} for "${name}"`, undefined, employeeName, phoneNumber);
         const result = await sendCategoryRequest(chatId, name, phoneNumber, employeeName);
@@ -192,7 +192,7 @@ async function sendCategoryRequest(
   employeeName: string
 ) {
   const text =
-    `📞 <b>Please classify this contact</b>\n\n` +
+    `📞 <b>Scenario A — Please classify this contact</b>\n\n` +
     `Employee: <b>${employeeName}</b>\n` +
     `Contact Name: <b>${contactName}</b>\n` +
     `Number: <code>${phoneNumber}</code>\n\n` +
@@ -208,7 +208,7 @@ async function sendNameRequest(
   callCount: number
 ) {
   const text =
-    `⚠️ <b>Contact Identification Needed</b>\n\n` +
+    `⚠️ <b>Scenario B — Contact Identification Needed</b>\n\n` +
     `Employee: <b>${employeeName}</b>\n` +
     `Number: <code>${phoneNumber}</code>\n` +
     `Call Count: <b>${callCount}</b>\n\n` +
