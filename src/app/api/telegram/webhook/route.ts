@@ -3,6 +3,9 @@ import connectToDatabase from "@/lib/db";
 import IdentifiedContact from "@/models/IdentifiedContact";
 import UnknownNumberTracker from "@/models/UnknownNumberTracker";
 import EmployeeTelegram from "@/models/EmployeeTelegram";
+import { runContactIntelligence } from "@/lib/contactIntelligence";
+import DeviceCallLog from "@/models/DeviceCallLog";
+import CallLog from "@/models/CallLog";
 import {
   answerCallbackQuery,
   editMessageText,
@@ -22,6 +25,71 @@ function isValidRequest(req: Request): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * After an employee links their Telegram, process all their pending contacts
+ * that couldn't be sent before (because chatId was null at the time).
+ */
+async function processPendingForEmployee(employeeName: string) {
+  try {
+    // 1. Scenario A: IdentifiedContacts with a name but no category (needs_category)
+    const pendingIdentified = await IdentifiedContact.find({
+      employeeName,
+      contactName: { $exists: true, $ne: null },
+      $or: [{ category: null }, { category: { $exists: false } }],
+    }).lean();
+
+    for (const contact of pendingIdentified) {
+      try {
+        await runContactIntelligence(
+          contact.phoneNumber,
+          contact.contactName,
+          employeeName,
+          (contact as any).deviceId || ""
+        );
+      } catch (e) {
+        console.error(`[PostRegistration] Failed for ${contact.phoneNumber}:`, e);
+      }
+    }
+
+    // 2. Scenario B: UnknownNumberTrackers at threshold still in 'tracking' status
+    const pendingTrackers = await UnknownNumberTracker.find({
+      employeeName,
+      status: "tracking",
+      callCount: { $gte: 5 },
+    }).lean();
+
+    for (const tracker of pendingTrackers) {
+      try {
+        // Find one call log for this phone+employee to get contactName/deviceId
+        const callLog = await DeviceCallLog.findOne({
+          phoneNumber: tracker.phoneNumber,
+          employeeName,
+        }).lean() as any;
+
+        const resolvedName =
+          callLog?.contactName && callLog.contactName !== "Unknown"
+            ? callLog.contactName
+            : undefined;
+
+        await runContactIntelligence(
+          tracker.phoneNumber,
+          resolvedName,
+          employeeName,
+          tracker.deviceId || callLog?.deviceId || ""
+        );
+      } catch (e) {
+        console.error(`[PostRegistration] Failed for tracker ${tracker.phoneNumber}:`, e);
+      }
+    }
+
+    console.log(
+      `[PostRegistration] Processed ${pendingIdentified.length} identified + ${pendingTrackers.length} tracked for "${employeeName}"`
+    );
+  } catch (err) {
+    console.error("[PostRegistration] Error:", err);
+  }
 }
 
 export async function POST(req: Request) {
@@ -260,6 +328,9 @@ async function handleMessage(message: any) {
         `Telegram connected successfully.\n\n` +
         `You will now receive contact classification requests from the call log system.`
     );
+
+    // Immediately process all pending contacts that were waiting for Telegram to be linked
+    await processPendingForEmployee(employee.employeeName);
     return;
   }
 
