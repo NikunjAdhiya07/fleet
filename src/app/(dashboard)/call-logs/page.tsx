@@ -65,6 +65,34 @@ export default function CallLogsPage() {
   const [comparisonPanels, setComparisonPanels] = useState<
     Array<{ id: string; dateFilter: "TODAY" | "YESTERDAY" | "CUSTOM" }>
   >([]);
+  const [compareViewMode, setCompareViewMode] = useState<"panels" | "singleGraph">("singleGraph");
+  const [selectedCompareEmployees, setSelectedCompareEmployees] = useState<string[]>([]);
+  const [compareXAxisMode, setCompareXAxisMode] = useState<"hour" | "date">("hour");
+  const [isDesktop, setIsDesktop] = useState(true);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const set = () => setIsDesktop(mq.matches);
+    set();
+    mq.addEventListener("change", set);
+    return () => mq.removeEventListener("change", set);
+  }, []);
+
+  // When in compare mode and employees load, default to all selected if none selected yet
+  const employeeNames = useMemo(() => {
+    const names = new Set<string>();
+    logs.forEach((log) => {
+      const name = log.employeeName || log.driverId?.userId?.name;
+      if (name) names.add(name);
+    });
+    return Array.from(names).sort();
+  }, [logs]);
+
+  useEffect(() => {
+    if (comparisonMode && selectedCompareEmployees.length === 0 && employeeNames.length > 0) {
+      setSelectedCompareEmployees(employeeNames);
+    }
+  }, [comparisonMode, employeeNames, selectedCompareEmployees.length]);
 
   const toggleComparisonMode = () => {
     if (!comparisonMode) {
@@ -72,6 +100,8 @@ export default function CallLogsPage() {
         { id: "panel-a", dateFilter: "TODAY" },
         { id: "panel-b", dateFilter: "YESTERDAY" },
       ]);
+      setSelectedCompareEmployees(employeeNames);
+      setCompareXAxisMode("hour");
     }
     setComparisonMode(!comparisonMode);
   };
@@ -192,16 +222,6 @@ export default function CallLogsPage() {
   // Using an effect that triggers on filteredLogs changes ensures tags represent
   // what's visible, and avoids excessive repeated loading.
   
-  // Derive unique employee names from logs
-  const employeeNames = useMemo(() => {
-    const names = new Set<string>();
-    logs.forEach((log) => {
-      const name = log.employeeName || log.driverId?.userId?.name;
-      if (name) names.add(name);
-    });
-    return Array.from(names).sort();
-  }, [logs]);
-
   // When employee list changes, reset selection if selected employee no longer present
   useEffect(() => {
     if (selectedEmployee !== "ALL" && !employeeNames.includes(selectedEmployee)) {
@@ -392,6 +412,157 @@ export default function CallLogsPage() {
     return base.filter((b) => b.total > 0);
   }, [filteredLogs, timeBuckets]);
 
+  // Date range for "by day" chart: derived from selected date range (each day in range = Day 1, Day 2, ...)
+  const chartDateRange = useMemo(() => {
+    let start: Date;
+    let end: Date;
+    if (dateFilter === "TODAY") {
+      start = startOfDay(new Date());
+      end = endOfDay(new Date());
+    } else if (dateFilter === "YESTERDAY") {
+      const y = subDays(new Date(), 1);
+      start = startOfDay(y);
+      end = endOfDay(y);
+    } else if (dateFilter === "CUSTOM" && dateRange?.from) {
+      start = startOfDay(dateRange.from);
+      end = dateRange.to ? endOfDay(dateRange.to) : endOfDay(dateRange.from);
+    } else {
+      end = endOfDay(new Date());
+      start = startOfDay(subDays(end, 4));
+    }
+    const days: { label: string; dateTs: number; dayIndex: number }[] = [];
+    const maxDays = 31;
+    for (let i = 0; i < maxDays; i++) {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      const dayStart = startOfDay(d);
+      if (dayStart.getTime() > end.getTime()) break;
+      days.push({
+        label: format(dayStart, "d MMM"),
+        dateTs: dayStart.getTime(),
+        dayIndex: i,
+      });
+    }
+    return { start, end, days };
+  }, [dateFilter, dateRange]);
+
+  // Logs filtered for single-graph compare (selected employees + date range + call type filter)
+  const singleGraphLogs = useMemo(() => {
+    if (selectedCompareEmployees.length === 0) return [];
+    const empSet = new Set(selectedCompareEmployees);
+    let list = logs.filter((log) => empSet.has(getEmployeeName(log)));
+    if (typeFilter !== "ALL") {
+      list = list.filter((log) => log.callType === typeFilter);
+    }
+    const { start, end } = chartDateRange;
+    list = list.filter((log) => {
+      if (!log.timestamp) return false;
+      const t = new Date(log.timestamp).getTime();
+      return t >= start.getTime() && t <= end.getTime();
+    });
+    const unique: any[] = [];
+    const sorted = [...list].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    sorted.forEach((log) => {
+      if (!log.timestamp) {
+        unique.push(log);
+        return;
+      }
+      const logTime = new Date(log.timestamp).getTime();
+      const emp = getEmployeeName(log);
+      const isDup = unique.some((ex) => {
+        if (ex.phoneNumber !== log.phoneNumber || ex.callType !== log.callType || getEmployeeName(ex) !== emp) return false;
+        return Math.abs(new Date(ex.timestamp).getTime() - logTime) < 300000 && Math.abs(ex.duration - log.duration) <= 30;
+      });
+      if (!isDup) unique.push(log);
+    });
+    return unique;
+  }, [logs, selectedCompareEmployees, chartDateRange, typeFilter]);
+
+  // Single-graph: grouped bars (one bar per employee per slot), each bar stacked by incoming/outgoing/missed. By hour.
+  const singleGraphChartDataByHour = useMemo(() => {
+    const empKeys = selectedCompareEmployees;
+    if (empKeys.length === 0) return [];
+    const base = timeBuckets.map((b) => {
+      const row: Record<string, string | number> = { timeRange: b.label, hour: b.hour };
+      empKeys.forEach((e) => {
+        row[`${e}_incoming`] = 0;
+        row[`${e}_outgoing`] = 0;
+        row[`${e}_missed`] = 0;
+      });
+      return row;
+    });
+    singleGraphLogs.forEach((log) => {
+      const date = new Date(log.timestamp);
+      if (isNaN(date.getTime())) return;
+      const hour = date.getHours();
+      const bucket = base[hour];
+      if (!bucket) return;
+      const emp = getEmployeeName(log);
+      if (!empKeys.includes(emp)) return;
+      const key = log.callType === "INCOMING" ? `${emp}_incoming` : log.callType === "OUTGOING" ? `${emp}_outgoing` : `${emp}_missed`;
+      if (typeof bucket[key] === "number") (bucket[key] as number) += 1;
+    });
+    return base.filter((b) =>
+      empKeys.some((e) => ((b[`${e}_incoming`] as number) || 0) + ((b[`${e}_outgoing`] as number) || 0) + ((b[`${e}_missed`] as number) || 0) > 0)
+    );
+  }, [singleGraphLogs, timeBuckets, selectedCompareEmployees]);
+
+  // Single-graph: by date (one group per day in range, e.g. "10 Mar", "11 Mar", ...)
+  const singleGraphChartDataByDate = useMemo(() => {
+    const empKeys = selectedCompareEmployees;
+    const { days } = chartDateRange;
+    if (empKeys.length === 0 || days.length === 0) return [];
+    const base = days.map((d) => {
+      const row: Record<string, string | number> = { timeRange: d.label, dayIndex: d.dayIndex, dateTs: d.dateTs };
+      empKeys.forEach((e) => {
+        row[`${e}_incoming`] = 0;
+        row[`${e}_outgoing`] = 0;
+        row[`${e}_missed`] = 0;
+      });
+      return row;
+    });
+    singleGraphLogs.forEach((log) => {
+      const logDate = new Date(log.timestamp);
+      if (isNaN(logDate.getTime())) return;
+      const logDayStart = startOfDay(logDate).getTime();
+      const row = base.find((b) => b.dateTs === logDayStart);
+      if (!row) return;
+      const emp = getEmployeeName(log);
+      if (!empKeys.includes(emp)) return;
+      const key = log.callType === "INCOMING" ? `${emp}_incoming` : log.callType === "OUTGOING" ? `${emp}_outgoing` : `${emp}_missed`;
+      if (typeof row[key] === "number") (row[key] as number) += 1;
+    });
+    return base;
+  }, [singleGraphLogs, chartDateRange, selectedCompareEmployees]);
+
+  const singleGraphChartData = compareXAxisMode === "date" ? singleGraphChartDataByDate : singleGraphChartDataByHour;
+
+  // Fixed color per employee: each employee gets one base color; segments use dark/medium/light shades of it.
+  // [incoming (dark), outgoing (medium), missed (light)] per employee index.
+  const EMPLOYEE_SEGMENT_COLORS: [string, string, string][] = [
+    ["#4f46e5", "#6366f1", "#818cf8"],   // Purple (Dipak, etc.)
+    ["#ca8a04", "#eab308", "#facc15"],   // Yellow/Amber
+    ["#0d9488", "#14b8a6", "#2dd4bf"],   // Teal
+    ["#be123c", "#ec4899", "#f472b6"],   // Pink/Rose
+    ["#b45309", "#f59e0b", "#fbbf24"],   // Amber
+    ["#0891b2", "#06b6d4", "#22d3ee"],   // Cyan
+    ["#65a30d", "#84cc16", "#a3e635"],   // Lime
+    ["#ea580c", "#f97316", "#fb923c"],   // Orange
+  ];
+  const getEmployeeSegmentColors = (empIdx: number) => {
+    const row = EMPLOYEE_SEGMENT_COLORS[empIdx % EMPLOYEE_SEGMENT_COLORS.length];
+    return { incoming: row[0], outgoing: row[1], missed: row[2] };
+  };
+  const getEmployeeBaseColor = (empIdx: number) => EMPLOYEE_SEGMENT_COLORS[empIdx % EMPLOYEE_SEGMENT_COLORS.length][1];
+
+  const getInitials = (name: string) =>
+    name
+      .split(/\s+/)
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+
   const AnalyticsTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload || payload.length === 0) return null;
     const data = payload[0].payload;
@@ -416,6 +587,57 @@ export default function CallLogsPage() {
             <span className="text-slate-400">Total</span>
             <span className="font-semibold text-slate-100">{data.total}</span>
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  const CompareTooltip = ({ active, payload, label }: any) => {
+    if (!active || !payload || payload.length === 0) return null;
+    const items = payload.filter((p: any) => typeof p.dataKey === "string" && (p.dataKey.endsWith("_incoming") || p.dataKey.endsWith("_outgoing") || p.dataKey.endsWith("_missed")));
+    const byEmployee: Record<string, { incoming: number; outgoing: number; missed: number; color: string }> = {};
+    items.forEach((p: any) => {
+      const key = String(p.dataKey);
+      const emp = key.replace(/_incoming$|_outgoing$|_missed$/, "");
+      if (!byEmployee[emp]) {
+        const idx = selectedCompareEmployees.indexOf(emp);
+        byEmployee[emp] = { incoming: 0, outgoing: 0, missed: 0, color: idx >= 0 ? getEmployeeBaseColor(idx) : "#94a3b8" };
+      }
+      if (key.endsWith("_incoming")) byEmployee[emp].incoming = Number(p.value);
+      else if (key.endsWith("_outgoing")) byEmployee[emp].outgoing = Number(p.value);
+      else byEmployee[emp].missed = Number(p.value);
+    });
+    return (
+      <div className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs shadow-lg min-w-[180px]">
+        <div className="font-semibold text-slate-100 mb-2">{label}</div>
+        <div className="space-y-3">
+          {Object.entries(byEmployee).map(([emp, { incoming, outgoing, missed, color }]) => {
+            const total = incoming + outgoing + missed;
+            return (
+              <div key={emp} className="space-y-0.5">
+                <div className="flex items-center gap-2 font-medium border-b border-slate-700 pb-0.5">
+                  <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: color }} />
+                  <span style={{ color }}>{emp}</span>
+                </div>
+                <div className="flex justify-between gap-4 text-slate-400">
+                  <span>Incoming</span>
+                  <span className="font-medium text-slate-200">{incoming}</span>
+                </div>
+                <div className="flex justify-between gap-4 text-slate-400">
+                  <span>Outgoing</span>
+                  <span className="font-medium text-slate-200">{outgoing}</span>
+                </div>
+                <div className="flex justify-between gap-4 text-slate-400">
+                  <span>Missed</span>
+                  <span className="font-medium text-slate-200">{missed}</span>
+                </div>
+                <div className="flex justify-between gap-4 pt-0.5 border-t border-slate-800 text-slate-300">
+                  <span>Total</span>
+                  <span className="font-semibold">{total}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -690,13 +912,40 @@ export default function CallLogsPage() {
         <div className="space-y-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <ArrowLeftRight className="w-4 h-4 text-indigo-400" />
                 <span className="text-sm font-semibold text-slate-200">Comparison Mode</span>
-                <span className="text-xs text-slate-500">· {comparisonPanels.length} panels</span>
+                <span className="text-xs text-slate-500">
+                  · {compareViewMode === "singleGraph" ? "Single graph" : `${comparisonPanels.length} panels`}
+                </span>
+                {/* View mode toggle */}
+                <div className="flex rounded-full bg-slate-800 p-0.5">
+                  <button
+                    onClick={() => setCompareViewMode("singleGraph")}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-xs font-medium transition-colors",
+                      compareViewMode === "singleGraph"
+                        ? "bg-indigo-600 text-white"
+                        : "text-slate-400 hover:text-slate-200"
+                    )}
+                  >
+                    Single graph
+                  </button>
+                  <button
+                    onClick={() => setCompareViewMode("panels")}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-xs font-medium transition-colors",
+                      compareViewMode === "panels"
+                        ? "bg-indigo-600 text-white"
+                        : "text-slate-400 hover:text-slate-200"
+                    )}
+                  >
+                    Panels
+                  </button>
+                </div>
               </div>
               <div className="flex items-center gap-2">
-                {comparisonPanels.length < 4 && (
+                {compareViewMode === "panels" && comparisonPanels.length < 4 && (
                   <button
                     onClick={addComparisonPanel}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors"
@@ -715,17 +964,271 @@ export default function CallLogsPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {comparisonPanels.map((panel, index) => (
-              <ComparisonPanel
-                key={panel.id}
-                panelIndex={index}
-                initialDateFilter={panel.dateFilter}
-                onRemove={() => removeComparisonPanel(panel.id)}
-                canRemove={comparisonPanels.length > 2}
-              />
-            ))}
-          </div>
+          {compareViewMode === "singleGraph" && (
+            <Card className="bg-slate-900 border-slate-800 text-slate-100 relative z-10">
+              <div className="p-4 sm:p-6 space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <User className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span className="text-xs sm:text-sm font-medium text-slate-400">Compare employees (same graph)</span>
+                  </div>
+                  <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2">
+                    <div className="overflow-x-auto overflow-y-hidden pb-1 -mx-1 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent" style={{ WebkitOverflowScrolling: "touch" }}>
+                      <div className="flex gap-1.5 sm:gap-2 min-w-max sm:min-w-0 sm:flex-wrap">
+                        {employeeNames.length === 0 && isLoading ? (
+                          <span className="text-xs text-slate-500 py-2">Loading...</span>
+                        ) : (
+                          employeeNames.map((name) => {
+                            const isSelected = selectedCompareEmployees.includes(name);
+                            const colorIdx = selectedCompareEmployees.indexOf(name);
+                            const empColor = colorIdx >= 0 ? getEmployeeBaseColor(colorIdx) : undefined;
+                            return (
+                              <button
+                                key={name}
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setSelectedCompareEmployees((prev) => prev.filter((n) => n !== name));
+                                  } else {
+                                    setSelectedCompareEmployees((prev) => [...prev, name].sort());
+                                  }
+                                }}
+                                className={cn(
+                                  "px-2 py-1 sm:py-1.5 rounded-full text-[11px] sm:text-xs font-medium transition-all border shrink-0",
+                                  isSelected
+                                    ? "border-2"
+                                    : "bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700"
+                                )}
+                                style={isSelected && empColor ? { borderColor: empColor, color: empColor, backgroundColor: `${empColor}20` } : undefined}
+                              >
+                                {name}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                    {selectedCompareEmployees.length > 0 && (
+                      <span className="text-xs text-slate-500 shrink-0">
+                        {selectedCompareEmployees.length} selected
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-slate-400">X-axis</span>
+                  <div className="flex rounded-full bg-slate-800 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setCompareXAxisMode("hour")}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-xs font-medium transition-colors",
+                        compareXAxisMode === "hour" ? "bg-emerald-600 text-white" : "text-slate-400 hover:text-slate-200"
+                      )}
+                    >
+                      By hour
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCompareXAxisMode("date")}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-xs font-medium transition-colors",
+                        compareXAxisMode === "date" ? "bg-emerald-600 text-white" : "text-slate-400 hover:text-slate-200"
+                      )}
+                    >
+                      By date range
+                    </button>
+                  </div>
+                  {compareXAxisMode === "date" && (
+                    <span className="text-[11px] text-slate-500">
+                      Use Custom Date above to pick range (e.g. 10 Mar – 15 Mar)
+                    </span>
+                  )}
+                </div>
+
+                <div className="min-h-[340px] h-[50vh] sm:h-[400px] sm:min-h-[360px] max-h-[520px]">
+                  {selectedCompareEmployees.length === 0 ? (
+                    <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                      Select one or more employees to compare in the same graph.
+                    </div>
+                  ) : singleGraphChartData.length === 0 ? (
+                    <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                      No call activity for selected employees and date range.
+                    </div>
+                  ) : (
+                    <div className="w-full h-full flex flex-col">
+                      <p className="text-[11px] text-slate-500 mb-1 sm:hidden">Swipe horizontally to see all hours</p>
+                      <div className="overflow-x-auto w-full flex-1 min-h-0" style={{ WebkitOverflowScrolling: "touch" }}>
+                        <div className="h-full min-h-[300px] w-full" style={{ minWidth: Math.max(singleGraphChartData.length * (isDesktop ? 130 : 72), isDesktop ? 520 : 320) }}>
+                          <ResponsiveContainer width="100%" height="100%" minHeight={300}>
+                      <ComposedChart
+                        data={singleGraphChartData}
+                        margin={{ top: 32, right: 16, left: 8, bottom: 76 }}
+                        barCategoryGap="16%"
+                        barGap={0}
+                      >
+                        <XAxis
+                          dataKey="timeRange"
+                          tickLine={false}
+                          axisLine={{ stroke: "#1f2937" }}
+                          tick={{ fill: "#9ca3af", fontSize: 11, textAnchor: "end" }}
+                          interval={0}
+                          angle={-45}
+                        />
+                        <YAxis
+                          allowDecimals={false}
+                          tickLine={false}
+                          axisLine={{ stroke: "#1f2937" }}
+                          tick={{ fill: "#9ca3af", fontSize: 11 }}
+                          tickCount={8}
+                          width={28}
+                        />
+                        <RechartsTooltip content={<CompareTooltip />} />
+                        {selectedCompareEmployees.flatMap((emp, empIdx) => {
+                          const colors = getEmployeeSegmentColors(empIdx);
+                          return [
+                            <Bar
+                              key={`${emp}_incoming`}
+                              dataKey={`${emp}_incoming`}
+                              name="Incoming"
+                              stackId={emp}
+                              fill={colors.incoming}
+                              radius={[0, 0, 0, 0]}
+                            >
+                              <LabelList
+                                dataKey={`${emp}_incoming`}
+                                position="center"
+                                fill="#fff"
+                                fontSize={9}
+                                fontWeight={600}
+                                formatter={(value: any) => (value > 0 ? String(value) : "")}
+                              />
+                            </Bar>,
+                            <Bar
+                              key={`${emp}_outgoing`}
+                              dataKey={`${emp}_outgoing`}
+                              name="Outgoing"
+                              stackId={emp}
+                              fill={colors.outgoing}
+                              radius={[0, 0, 0, 0]}
+                            >
+                              <LabelList
+                                dataKey={`${emp}_outgoing`}
+                                position="center"
+                                fill="#fff"
+                                fontSize={9}
+                                fontWeight={600}
+                                formatter={(value: any) => (value > 0 ? String(value) : "")}
+                              />
+                            </Bar>,
+                            <Bar
+                              key={`${emp}_missed`}
+                              dataKey={`${emp}_missed`}
+                              name="Missed"
+                              stackId={emp}
+                              fill={colors.missed}
+                              radius={[4, 4, 0, 0]}
+                            >
+                              <LabelList
+                                dataKey={`${emp}_missed`}
+                                position="center"
+                                fill="#fff"
+                                fontSize={9}
+                                fontWeight={600}
+                                formatter={(value: any) => (value > 0 ? String(value) : "")}
+                              />
+                              <LabelList
+                                dataKey={`${emp}_missed`}
+                                position="top"
+                                content={(props: any) => {
+                                  const payload = props.payload || {};
+                                  const total =
+                                    (Number(payload[`${emp}_incoming`]) || 0) +
+                                    (Number(payload[`${emp}_outgoing`]) || 0) +
+                                    (Number(payload[`${emp}_missed`]) || 0);
+                                  if (total === 0) return null;
+                                  const cx = (props.x || 0) + (props.width || 0) / 2;
+                                  const y = (props.y ?? 0) - 8;
+                                  return (
+                                    <text
+                                      x={cx}
+                                      y={y}
+                                      textAnchor="middle"
+                                      fill="#f8fafc"
+                                      fontSize={13}
+                                      fontWeight={700}
+                                    >
+                                      {total}
+                                    </text>
+                                  );
+                                }}
+                              />
+                            </Bar>,
+                          ];
+                        })}
+                      </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {selectedCompareEmployees.length > 0 && (
+                  <div className="pt-3 border-t border-slate-800 space-y-3">
+                    <div>
+                      <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Employee (bar color)</div>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                        {selectedCompareEmployees.map((emp, idx) => {
+                          const empColor = getEmployeeBaseColor(idx);
+                          return (
+                            <div key={emp} className="flex items-center gap-2">
+                              <span
+                                className="w-3 h-3 rounded-sm shrink-0 border border-slate-600"
+                                style={{ backgroundColor: empColor }}
+                              />
+                              <span className="text-xs font-medium" style={{ color: empColor }}>{emp}</span>
+                              <span className="text-[10px] text-slate-500 font-medium">({getInitials(emp)})</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Within each bar (segment)</div>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-3 h-2 rounded-sm" style={{ backgroundColor: EMPLOYEE_SEGMENT_COLORS[0][0] }} />
+                          Dark = Incoming
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-3 h-2 rounded-sm" style={{ backgroundColor: EMPLOYEE_SEGMENT_COLORS[0][1] }} />
+                          Medium = Outgoing
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-3 h-2 rounded-sm" style={{ backgroundColor: EMPLOYEE_SEGMENT_COLORS[0][2] }} />
+                          Light = Missed
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
+
+          {compareViewMode === "panels" && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {comparisonPanels.map((panel, index) => (
+                <ComparisonPanel
+                  key={panel.id}
+                  panelIndex={index}
+                  initialDateFilter={panel.dateFilter}
+                  onRemove={() => removeComparisonPanel(panel.id)}
+                  canRemove={comparisonPanels.length > 2}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
