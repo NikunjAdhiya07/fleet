@@ -49,6 +49,7 @@ const GraphSkeleton = () => (
 export default function CallLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
   const [tags, setTags] = useState<Record<string, Array<{name: string, savedBy: any[]}>>>({});
+  const [intelligenceTags, setIntelligenceTags] = useState<Record<string, { category?: string; contactName?: string }>>({});
   const [totalCount, setTotalCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -144,7 +145,6 @@ export default function CallLogsPage() {
   };
 
   const fetchTags = async (logsToProcess: any[]) => {
-    // Avoid re-fetching tags unnecessarily
     const uniquePhones = [...new Set(logsToProcess.map((log) => log.phoneNumber))];
     if (uniquePhones.length === 0) return;
 
@@ -160,6 +160,31 @@ export default function CallLogsPage() {
       }
     } catch (error) {
       console.error("Failed to fetch tags:", error);
+    }
+  };
+
+  const fetchIntelligenceTags = async (logsToProcess: any[]) => {
+    const pairs = Array.from(
+      new Map(
+        logsToProcess.map((log) => {
+          const emp = log.employeeName || log.driverId?.userId?.name || "Unknown";
+          return [`${log.phoneNumber}|${emp}`, { phoneNumber: log.phoneNumber, employeeName: emp }];
+        })
+      ).values()
+    );
+    if (pairs.length === 0) return;
+    try {
+      const res = await fetch("/api/contact-intelligence/tags-bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pairs }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIntelligenceTags((prev) => ({ ...prev, ...data.tags }));
+      }
+    } catch (error) {
+      console.error("Failed to fetch intelligence tags:", error);
     }
   };
 
@@ -244,6 +269,7 @@ export default function CallLogsPage() {
   useEffect(() => {
     if (filteredLogs.length > 0) {
       fetchTags(filteredLogs);
+      fetchIntelligenceTags(filteredLogs);
     }
   }, [logs, searchQuery, selectedEmployee]);
 
@@ -273,6 +299,51 @@ export default function CallLogsPage() {
         </Badge>
       );
     return null;
+  };
+
+  const CATEGORY_COLORS: Record<string, string> = {
+    personal: "bg-purple-500/15 text-purple-300 border-purple-500/30",
+    staff: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+    "Existing Client": "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+    "New Client": "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    courier: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+    Family: "bg-purple-500/15 text-purple-300 border-purple-500/30",
+    Colleague: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+    Other: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+  };
+
+  const IdentifiedTag = ({
+    log,
+    getEmployeeName,
+    intelligenceTags,
+  }: {
+    log: any;
+    getEmployeeName: (log: any) => string;
+    intelligenceTags: Record<string, { category?: string; contactName?: string }>;
+  }) => {
+    const key = `${log.phoneNumber}|${getEmployeeName(log)}`;
+    const tag = intelligenceTags[key];
+    if (!tag) return <span className="text-slate-500 text-xs">—</span>;
+    return (
+      <div className="flex flex-wrap gap-1">
+        {tag.category && (
+          <span
+            className={cn(
+              "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border",
+              CATEGORY_COLORS[tag.category] ?? "bg-slate-700 text-slate-300 border-slate-600"
+            )}
+          >
+            {tag.category}
+          </span>
+        )}
+        {tag.contactName && (
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-violet-500/15 text-violet-300 border-violet-500/30">
+            {tag.contactName}
+          </span>
+        )}
+        {!tag.category && !tag.contactName && <span className="text-slate-500 text-xs">—</span>}
+      </div>
+    );
   };
 
   const timeBuckets = useMemo(() => {
@@ -689,6 +760,7 @@ export default function CallLogsPage() {
               <TableRow className="border-slate-800 hover:bg-transparent">
                 <TableHead className="text-slate-400">Employee</TableHead>
                 <TableHead className="text-slate-400">Contact</TableHead>
+                <TableHead className="text-slate-400">Identified</TableHead>
                 <TableHead className="text-slate-400">Phone Number</TableHead>
                 <TableHead className="text-slate-400">Type</TableHead>
                 <TableHead className="text-slate-400">Duration</TableHead>
@@ -698,13 +770,13 @@ export default function CallLogsPage() {
             <TableBody>
               {isLoading && filteredLogs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-32 text-center border-b-0">
+                  <TableCell colSpan={7} className="h-32 text-center border-b-0">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto text-indigo-500" />
                   </TableCell>
                 </TableRow>
               ) : filteredLogs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center text-slate-500 border-b-0">
+                  <TableCell colSpan={7} className="h-24 text-center text-slate-500 border-b-0">
                     No call logs found matching your filters.
                   </TableCell>
                 </TableRow>
@@ -736,6 +808,9 @@ export default function CallLogsPage() {
                           </div>
                         )}
                       </div>
+                    </TableCell>
+                    <TableCell className="text-slate-400">
+                      <IdentifiedTag log={log} getEmployeeName={getEmployeeName} intelligenceTags={intelligenceTags} />
                     </TableCell>
                     <TableCell className="text-slate-300 font-mono text-sm">
                       {log.phoneNumber}
@@ -781,6 +856,8 @@ export default function CallLogsPage() {
                 const maxVisibleTags = 2;
                 const visibleTags = logTags.slice(0, maxVisibleTags);
                 const overflowTagCount = logTags.length - maxVisibleTags;
+                const intelKey = `${log.phoneNumber}|${employee}`;
+                const intelTag = intelligenceTags[intelKey];
 
                 return (
                   <div key={log._id} className="p-2.5 hover:bg-slate-800/40 transition-colors w-full flex flex-col gap-1 min-h-0">
@@ -804,6 +881,26 @@ export default function CallLogsPage() {
                           : "N/A"}
                       </span>
                     </div>
+                    {/* Identified: Scenario A category or Scenario B name */}
+                    {(intelTag?.category || intelTag?.contactName) && (
+                      <div className="flex flex-wrap gap-1">
+                        {intelTag.category && (
+                          <span
+                            className={cn(
+                              "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border",
+                              CATEGORY_COLORS[intelTag.category] ?? "bg-slate-700 text-slate-300 border-slate-600"
+                            )}
+                          >
+                            {intelTag.category}
+                          </span>
+                        )}
+                        {intelTag.contactName && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-violet-500/15 text-violet-300 border-violet-500/30">
+                            {intelTag.contactName}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {/* Row 3: Tags in one row, overflow as +N — tap to open tag modal */}
                     {logTags.length > 0 && (
                       <div className="flex items-center gap-1 overflow-hidden min-w-0">
