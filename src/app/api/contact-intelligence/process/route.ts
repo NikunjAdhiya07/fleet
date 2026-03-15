@@ -42,6 +42,7 @@ export async function GET(req: Request) {
     } else {
       reason = "No valid x-api-key and no valid non-driver session.";
     }
+    console.warn("[contact-intelligence/process] 401:", reason);
     return NextResponse.json({ error: "Unauthorized", message: reason }, { status: 401 });
   }
 
