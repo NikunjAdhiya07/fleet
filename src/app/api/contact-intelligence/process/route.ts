@@ -25,15 +25,24 @@ export const maxDuration = 60;
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   const apiKey = req.headers.get("x-api-key");
-  
   const expectedKey = process.env.API_KEY || "change-this-key";
-  
-  const isAuthorized = 
-    (apiKey && apiKey === expectedKey) || 
-    (session && session.user.role !== "driver");
+
+  const hasValidApiKey = apiKey && apiKey === expectedKey;
+  const hasValidSession = session && session.user?.role !== "driver";
+  const isAuthorized = hasValidApiKey || hasValidSession;
 
   if (!isAuthorized) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    let reason: string;
+    if (apiKey && apiKey !== expectedKey) {
+      reason = "Invalid x-api-key (does not match API_KEY env)";
+    } else if (session?.user?.role === "driver") {
+      reason = "Session role is 'driver'; only non-driver users can call this endpoint";
+    } else if (!apiKey && !session) {
+      reason = "Missing x-api-key header and no session. Log in or send x-api-key.";
+    } else {
+      reason = "No valid x-api-key and no valid non-driver session.";
+    }
+    return NextResponse.json({ error: "Unauthorized", message: reason }, { status: 401 });
   }
 
   try {
