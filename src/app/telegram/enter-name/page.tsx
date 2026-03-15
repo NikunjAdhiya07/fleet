@@ -66,15 +66,21 @@ function EnterNameForm() {
     <div className="min-h-screen bg-[var(--tg-theme-bg-color,#fff)] text-[var(--tg-theme-text-color,#000)] p-4 flex flex-col items-center justify-center">
       <div className="w-full max-w-sm">
         <h1 className="text-lg font-semibold mb-2">Enter contact name</h1>
-        <p className="text-sm opacity-80 mb-4">
+        <p className="text-sm opacity-80 mb-1">
           This number appeared 5+ times in your call logs. Who is it?
         </p>
+        {p && (
+          <p className="text-sm font-medium mb-4 text-[var(--tg-theme-link-color,#2481cc)]">
+            Number: {decodeURIComponent(p)}
+          </p>
+        )}
+        {!p && <div className="mb-4" />}
         <form onSubmit={handleSubmit} className="space-y-3">
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Jignesh"
+            placeholder="e.g. John Doe"
             className="w-full px-4 py-3 rounded-lg border border-[var(--tg-theme-hint-color,#999)] bg-[var(--tg-theme-bg-color,#fff)] text-[var(--tg-theme-text-color,#000)] placeholder-[var(--tg-theme-hint-color,#999)]"
             autoFocus
             disabled={status === "sending" || status === "done"}
