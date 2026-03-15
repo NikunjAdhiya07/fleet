@@ -125,11 +125,13 @@ export async function GET(req: Request) {
         }
       }
 
-      // 2b. Scenario B retries: trackers at threshold still in 'tracking' status
+      // 2b. Scenario B retries: trackers at threshold in 'tracking', or 'awaiting_name' but message never sent (no telegramMessageId)
       const pendingB = await UnknownNumberTracker.find({
         employeeName: { $in: Array.from(linkedNames) },
-        status: "tracking",
-        callCount: { $gte: 5 },
+        $or: [
+          { status: "tracking", callCount: { $gte: 5 } },
+          { status: "awaiting_name", $or: [{ telegramMessageId: null }, { telegramMessageId: { $exists: false } }] },
+        ],
       }).lean();
 
       for (const tracker of pendingB) {

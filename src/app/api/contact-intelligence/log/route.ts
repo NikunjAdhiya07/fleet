@@ -156,8 +156,11 @@ export async function GET(req: Request) {
         messageSent = true;
       } else if (tracker?.status === "awaiting_name") {
         status = "awaiting_name";
-        actionNeeded = "Telegram sent — waiting for employee to reply with name";
-        messageSent = true;
+        const messageActuallySent = !!(tracker as any)?.telegramMessageId;
+        actionNeeded = messageActuallySent
+          ? "Telegram sent — waiting for employee to reply with name"
+          : "Awaiting name — Telegram may not have been sent (will retry)";
+        messageSent = messageActuallySent;
       } else if (agg.callCount >= 5) {
         status = "threshold_reached";
         actionNeeded = hasTelegram
