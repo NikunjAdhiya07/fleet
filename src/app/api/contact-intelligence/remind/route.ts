@@ -26,14 +26,16 @@ export async function POST(req: Request) {
     );
   }
 
+  const displayName =
+    contact.contactName && contact.contactName !== contact.phoneNumber
+      ? contact.contactName
+      : null;
+  const detailLine = displayName
+    ? `Name: <b>${displayName}</b>\nNumber: <code>${contact.phoneNumber}</code>`
+    : `Number: <code>${contact.phoneNumber}</code>`;
   const text =
-    `🔔 <b>Reminder</b>\n\n` +
-    `You previously identified this contact:\n\n` +
-    `Name: <b>${contact.contactName}</b>\n` +
-    `Category: <b>${contact.category}</b>\n` +
-    `Number: <code>${contact.phoneNumber}</code>\n\n` +
-    `But this number is still <b>not saved</b> in your phone contacts.\n` +
-    `Please save it.`;
+    `Confirm once you've saved this contact in your phone?\n\n` +
+    detailLine;
 
   await sendInlineKeyboard(
     contact.telegramChatId,

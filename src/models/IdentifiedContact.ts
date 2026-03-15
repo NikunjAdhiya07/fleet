@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
-export type ContactCategory = 'Family' | 'Colleague' | 'Existing Client' | 'New Client' | 'Other';
+export type ContactCategory = 'personal' | 'staff' | 'Existing Client' | 'New Client' | 'courier';
 
 export interface IIdentifiedContact extends Document {
   phoneNumber: string;
@@ -12,6 +12,10 @@ export interface IIdentifiedContact extends Document {
   remindLater: boolean;
   telegramChatId?: string;
   identifiedAt?: Date;
+  /** When we last sent a "classify this contact" Telegram message; used to avoid spam. */
+  categoryRequestSentAt?: Date;
+  /** When we last sent a "confirm you've saved" reminder; used to avoid spam. */
+  lastReminderSentAt?: Date;
 }
 
 const IdentifiedContactSchema = new Schema(
@@ -22,12 +26,14 @@ const IdentifiedContactSchema = new Schema(
     contactName: { type: String },
     category: {
       type: String,
-      enum: ['Family', 'Colleague', 'Existing Client', 'New Client', 'Other'],
+      enum: ['personal', 'staff', 'Existing Client', 'New Client', 'courier'],
     },
     savedInPhone: { type: Boolean, default: false },
     remindLater: { type: Boolean, default: false },
     telegramChatId: { type: String },
     identifiedAt: { type: Date },
+    categoryRequestSentAt: { type: Date },
+    lastReminderSentAt: { type: Date },
   },
   { timestamps: true }
 );

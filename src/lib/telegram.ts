@@ -7,7 +7,8 @@ import connectToDatabase from '@/lib/db';
 import BotLog from '@/models/BotLog';
 
 export type InlineButton = { text: string; callback_data: string };
-export type InlineKeyboard = InlineButton[][];
+export type WebAppButton = { text: string; web_app: { url: string } };
+export type InlineKeyboard = (InlineButton | WebAppButton)[][];
 
 async function callTelegram(method: string, body: object): Promise<any> {
   const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -128,15 +129,22 @@ export function categoryKeyboard(phoneNumber: string, employeeName: string): Inl
     `cat:${encodeURIComponent(phoneNumber)}:${encodeURIComponent(employeeName)}:${encodeURIComponent(cat)}`;
   return [
     [
-      { text: '👨‍👩‍👧 Family', callback_data: encode('Family') },
-      { text: '🤝 Colleague', callback_data: encode('Colleague') },
+      { text: '👨‍👩‍👧 personal', callback_data: encode('personal') },
+      { text: '🤝 staff', callback_data: encode('staff') },
     ],
     [
       { text: '✅ Existing Client', callback_data: encode('Existing Client') },
       { text: '🆕 New Client', callback_data: encode('New Client') },
     ],
-    [{ text: '🔖 Other', callback_data: encode('Other') }],
+    [{ text: '🔖 courier', callback_data: encode('courier') }],
   ];
+}
+
+/** Scenario B: "Enter name" button that opens a Web App form (input inside the flow). */
+export function nameRequestKeyboard(phoneNumber: string, employeeName: string, chatId: string | number): InlineKeyboard {
+  const baseUrl = process.env.NEXTAUTH_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') || 'https://fleet-navy.vercel.app';
+  const url = `${baseUrl}/telegram/enter-name?p=${encodeURIComponent(phoneNumber)}&e=${encodeURIComponent(employeeName)}&c=${encodeURIComponent(String(chatId))}`;
+  return [[{ text: '✏️ Enter name', web_app: { url } }]];
 }
 
 /** The "save contact" confirmation keyboard. */

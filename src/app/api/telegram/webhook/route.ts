@@ -153,17 +153,24 @@ async function handleCallbackQuery(query: any) {
       { $set: { status: "identified" } }
     );
 
-    const name = contact.contactName || phoneNumber;
+    const displayName =
+      contact.contactName && contact.contactName !== phoneNumber
+        ? contact.contactName
+        : null;
+    const nameLine = displayName ? `Name: <b>${displayName}</b>\n` : "";
     await editMessageText(
       chatId,
       messageId,
-      `✅ <b>Contact Classified</b>\n\nName: <b>${name}</b>\nCategory: <b>${category}</b>\nNumber: <code>${phoneNumber}</code>`
+      `✅ <b>Contact Classified</b>\n\n${nameLine}Category: <b>${category}</b>\nNumber: <code>${phoneNumber}</code>`
     );
 
+    const confirmLine = displayName
+      ? `Name: <b>${displayName}</b>\nNumber: <code>${phoneNumber}</code>`
+      : `Number: <code>${phoneNumber}</code>`;
     const saveText =
-      `📱 <b>Please save this contact in your phone</b>\n\n` +
-      `Name: <b>${name}</b>\n` +
-      `Number: <code>${phoneNumber}</code>`;
+      `✅ Contact classified.\n\n` +
+      `Confirm once you've saved this contact in your phone?\n\n` +
+      confirmLine;
 
     await sendInlineKeyboard(chatId, saveText, saveContactKeyboard(phoneNumber, employeeName));
     return;

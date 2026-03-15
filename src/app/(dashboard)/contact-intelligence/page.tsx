@@ -60,10 +60,14 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; dot: string 
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
-  Family: "bg-purple-500/15 text-purple-300 border-purple-500/30",
-  Colleague: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  personal: "bg-purple-500/15 text-purple-300 border-purple-500/30",
+  staff: "bg-sky-500/15 text-sky-300 border-sky-500/30",
   "Existing Client": "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   "New Client": "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  courier: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+  // legacy (pre-rename) so old records still get a color
+  Family: "bg-purple-500/15 text-purple-300 border-purple-500/30",
+  Colleague: "bg-sky-500/15 text-sky-300 border-sky-500/30",
   Other: "bg-slate-500/15 text-slate-300 border-slate-500/30",
 };
 

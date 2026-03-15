@@ -72,9 +72,14 @@ export async function GET(req: Request) {
       (a: any, b: any) => (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
     );
 
+    // Dedupe by (phoneNumber, employeeName) so one call in both DeviceCallLog and CallLog doesn't trigger two messages
+    const seenKey = new Set<string>();
     for (const call of newCalls) {
       const { phoneNumber, contactName, employeeName, deviceId } = call as any;
       if (!phoneNumber || !employeeName) continue;
+      const key = `${phoneNumber}|${employeeName}`;
+      if (seenKey.has(key)) continue;
+      seenKey.add(key);
 
       const identified = await IdentifiedContact.findOne({ phoneNumber, employeeName });
       if (identified?.category && identified?.contactName) continue;

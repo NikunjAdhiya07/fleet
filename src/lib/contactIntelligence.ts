@@ -21,13 +21,15 @@ import EmployeeTelegram from '@/models/EmployeeTelegram';
 import BotLog from '@/models/BotLog';
 import {
   sendInlineKeyboard,
-  sendReplyRequest,
   categoryKeyboard,
   saveContactKeyboard,
   sendMessage,
+  nameRequestKeyboard,
 } from '@/lib/telegram';
 
 const CALL_THRESHOLD = 5;
+/** Don't re-send "classify this contact" more than once per 24h to avoid spam. */
+const CATEGORY_REQUEST_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -82,10 +84,16 @@ export async function runContactIntelligence(
 
     if (identified?.contactName && identified?.category) {
       await log('info', 'SKIP_FULLY_DONE', `Contact already fully classified — name: "${identified.contactName}", category: "${identified.category}"`, undefined, employeeName, phoneNumber);
-      // Only send smart reminder if not saved in phone
-      if (!identified.savedInPhone && !identified.remindLater && chatId) {
+      // Only send smart reminder if not saved in phone, and not sent recently (avoid spam)
+      const lastReminderAt = identified.lastReminderSentAt ? new Date(identified.lastReminderSentAt).getTime() : 0;
+      const reminderCooldown = Date.now() - lastReminderAt < CATEGORY_REQUEST_COOLDOWN_MS;
+      if (!identified.savedInPhone && !identified.remindLater && chatId && !reminderCooldown) {
         await log('info', 'REMINDER', `Sending save-to-phone reminder`, undefined, employeeName, phoneNumber);
-        await sendSmartReminder(chatId, phoneNumber, identified.contactName, identified.category);
+        await sendSmartReminder(chatId, phoneNumber, employeeName, identified.contactName, identified.category);
+        await IdentifiedContact.updateOne(
+          { phoneNumber, employeeName },
+          { $set: { lastReminderSentAt: new Date() } }
+        );
       }
       return;
     }
@@ -119,11 +127,23 @@ export async function runContactIntelligence(
         await log('info', 'IDENTIFIED_CREATED', `Created IdentifiedContact for "${name}"`, undefined, employeeName, phoneNumber);
       }
 
-      // Send category request whenever we have name but no category yet (automatic + retries when Telegram linked later)
+      // Send category request at most once per cooldown to avoid spam (same contact every 10s)
+      const contactForCategory = await IdentifiedContact.findOne({ phoneNumber, employeeName }).lean();
+      const lastSentAt = contactForCategory?.categoryRequestSentAt ? new Date((contactForCategory as any).categoryRequestSentAt).getTime() : 0;
+      const withinCooldown = lastSentAt && Date.now() - lastSentAt < CATEGORY_REQUEST_COOLDOWN_MS;
+      if (withinCooldown) {
+        await log('info', 'SKIP_CATEGORY_COOLDOWN', `Already sent category request recently for "${name}" — skipping to avoid spam`, undefined, employeeName, phoneNumber);
+        return;
+      }
+
       if (chatId) {
         await log('info', 'SENDING_CATEGORY', `Sending category keyboard to chatId ${chatId} for "${name}"`, undefined, employeeName, phoneNumber);
         const result = await sendCategoryRequest(chatId, name, phoneNumber, employeeName);
         await log('success', 'MESSAGE_SENT', `Category keyboard sent successfully`, { telegramResult: result }, employeeName, phoneNumber);
+        await IdentifiedContact.updateOne(
+          { phoneNumber, employeeName },
+          { $set: { categoryRequestSentAt: new Date() } }
+        );
       } else {
         await log('warn', 'NO_CHATID', `Cannot send Telegram — employee "${employeeName}" has no linked Telegram chatId. They need to open the bot, send /start, then send their 10-digit phone number.`, undefined, employeeName, phoneNumber);
       }
@@ -161,8 +181,14 @@ export async function runContactIntelligence(
       await log('warn', 'THRESHOLD_NO_CHATID', `5 calls reached but employee "${employeeName}" has no Telegram linked — cannot send name request`, undefined, employeeName, phoneNumber);
 
     } else if (tracker.status !== 'tracking' && tracker.status !== 'awaiting_name' && tracker.status !== 'awaiting_category') {
-      if (identified && !identified.savedInPhone && !identified.remindLater && chatId) {
-        await sendSmartReminder(chatId, phoneNumber, identified.contactName ?? phoneNumber, identified.category ?? '');
+      const lastReminderAt = identified?.lastReminderSentAt ? new Date(identified.lastReminderSentAt).getTime() : 0;
+      const reminderCooldown = lastReminderAt && Date.now() - lastReminderAt < CATEGORY_REQUEST_COOLDOWN_MS;
+      if (identified && !identified.savedInPhone && !identified.remindLater && chatId && !reminderCooldown) {
+        await sendSmartReminder(chatId, phoneNumber, employeeName, identified.contactName ?? null, identified.category ?? '');
+        await IdentifiedContact.updateOne(
+          { phoneNumber, employeeName },
+          { $set: { lastReminderSentAt: new Date() } }
+        );
       }
     } else {
       await log('info', 'TRACKING', `Tracking ${tracker.callCount}/${CALL_THRESHOLD} calls — no action yet`, undefined, employeeName, phoneNumber);
@@ -213,26 +239,25 @@ async function sendNameRequest(
     `Number: <code>${phoneNumber}</code>\n` +
     `Call Count: <b>${callCount}</b>\n\n` +
     `This number has appeared <b>${callCount} times</b> in call logs.\n\n` +
-    `Please <b>reply to this message</b> with the contact name.\n\n` +
-    `Example:\n<i>Jignesh</i>`;
+    `Tap the button below to enter the contact name, or reply to this message with the name.`;
 
-  return sendReplyRequest(chatId, text);
+  return sendInlineKeyboard(chatId, text, nameRequestKeyboard(phoneNumber, employeeName, chatId));
 }
 
 async function sendSmartReminder(
   chatId: string,
   phoneNumber: string,
-  contactName: string,
+  employeeName: string,
+  contactName: string | null,
   category: string
 ) {
+  const displayName = contactName && contactName !== phoneNumber ? contactName : null;
+  const detailLine = displayName
+    ? `Name: <b>${displayName}</b>\nNumber: <code>${phoneNumber}</code>`
+    : `Number: <code>${phoneNumber}</code>`;
   const text =
-    `🔔 <b>Reminder</b>\n\n` +
-    `You previously identified this contact:\n\n` +
-    `Name: <b>${contactName}</b>\n` +
-    `Category: <b>${category}</b>\n` +
-    `Number: <code>${phoneNumber}</code>\n\n` +
-    `But this number is still <b>not saved</b> in your phone contacts.\n` +
-    `Please save it.`;
+    `Confirm once you've saved this contact in your phone?\n\n` +
+    detailLine;
 
-  await sendInlineKeyboard(chatId, text, saveContactKeyboard(phoneNumber, contactName));
+  await sendInlineKeyboard(chatId, text, saveContactKeyboard(phoneNumber, employeeName));
 }
