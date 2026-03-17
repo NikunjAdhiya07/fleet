@@ -537,23 +537,8 @@ export default function CallLogsPage() {
 
   const singleGraphChartData = compareXAxisMode === "date" ? singleGraphChartDataByDate : singleGraphChartDataByHour;
 
-  // Fixed color per employee: each employee gets one base color; segments use dark/medium/light shades of it.
-  // [incoming (dark), outgoing (medium), missed (light)] per employee index.
-  const EMPLOYEE_SEGMENT_COLORS: [string, string, string][] = [
-    ["#4f46e5", "#6366f1", "#818cf8"],   // Purple (Dipak, etc.)
-    ["#ca8a04", "#eab308", "#facc15"],   // Yellow/Amber
-    ["#0d9488", "#14b8a6", "#2dd4bf"],   // Teal
-    ["#be123c", "#ec4899", "#f472b6"],   // Pink/Rose
-    ["#b45309", "#f59e0b", "#fbbf24"],   // Amber
-    ["#0891b2", "#06b6d4", "#22d3ee"],   // Cyan
-    ["#65a30d", "#84cc16", "#a3e635"],   // Lime
-    ["#ea580c", "#f97316", "#fb923c"],   // Orange
-  ];
-  const getEmployeeSegmentColors = (empIdx: number) => {
-    const row = EMPLOYEE_SEGMENT_COLORS[empIdx % EMPLOYEE_SEGMENT_COLORS.length];
-    return { incoming: row[0], outgoing: row[1], missed: row[2] };
-  };
-  const getEmployeeBaseColor = (empIdx: number) => EMPLOYEE_SEGMENT_COLORS[empIdx % EMPLOYEE_SEGMENT_COLORS.length][1];
+  // Compare chart: same call-type colors as rest of app (green/blue/red). Employees identified by initials on bars.
+  const COMPARE_CALL_TYPE_COLORS = { incoming: "#22c55e", outgoing: "#3b82f6", missed: "#ef4444" };
 
   const getInitials = (name: string) =>
     name
@@ -595,14 +580,11 @@ export default function CallLogsPage() {
   const CompareTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload || payload.length === 0) return null;
     const items = payload.filter((p: any) => typeof p.dataKey === "string" && (p.dataKey.endsWith("_incoming") || p.dataKey.endsWith("_outgoing") || p.dataKey.endsWith("_missed")));
-    const byEmployee: Record<string, { incoming: number; outgoing: number; missed: number; color: string }> = {};
+    const byEmployee: Record<string, { incoming: number; outgoing: number; missed: number }> = {};
     items.forEach((p: any) => {
       const key = String(p.dataKey);
       const emp = key.replace(/_incoming$|_outgoing$|_missed$/, "");
-      if (!byEmployee[emp]) {
-        const idx = selectedCompareEmployees.indexOf(emp);
-        byEmployee[emp] = { incoming: 0, outgoing: 0, missed: 0, color: idx >= 0 ? getEmployeeBaseColor(idx) : "#94a3b8" };
-      }
+      if (!byEmployee[emp]) byEmployee[emp] = { incoming: 0, outgoing: 0, missed: 0 };
       if (key.endsWith("_incoming")) byEmployee[emp].incoming = Number(p.value);
       else if (key.endsWith("_outgoing")) byEmployee[emp].outgoing = Number(p.value);
       else byEmployee[emp].missed = Number(p.value);
@@ -611,13 +593,12 @@ export default function CallLogsPage() {
       <div className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs shadow-lg min-w-[180px]">
         <div className="font-semibold text-slate-100 mb-2">{label}</div>
         <div className="space-y-3">
-          {Object.entries(byEmployee).map(([emp, { incoming, outgoing, missed, color }]) => {
+          {Object.entries(byEmployee).map(([emp, { incoming, outgoing, missed }]) => {
             const total = incoming + outgoing + missed;
             return (
               <div key={emp} className="space-y-0.5">
-                <div className="flex items-center gap-2 font-medium border-b border-slate-700 pb-0.5">
-                  <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: color }} />
-                  <span style={{ color }}>{emp}</span>
+                <div className="font-medium border-b border-slate-700 pb-0.5 text-slate-200">
+                  {getInitials(emp)} — {emp}
                 </div>
                 <div className="flex justify-between gap-4 text-slate-400">
                   <span>Incoming</span>
@@ -980,8 +961,6 @@ export default function CallLogsPage() {
                         ) : (
                           employeeNames.map((name) => {
                             const isSelected = selectedCompareEmployees.includes(name);
-                            const colorIdx = selectedCompareEmployees.indexOf(name);
-                            const empColor = colorIdx >= 0 ? getEmployeeBaseColor(colorIdx) : undefined;
                             return (
                               <button
                                 key={name}
@@ -995,10 +974,9 @@ export default function CallLogsPage() {
                                 className={cn(
                                   "px-2 py-1 sm:py-1.5 rounded-full text-[11px] sm:text-xs font-medium transition-all border shrink-0",
                                   isSelected
-                                    ? "border-2"
+                                    ? "bg-indigo-600 text-white border-indigo-500"
                                     : "bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700"
                                 )}
-                                style={isSelected && empColor ? { borderColor: empColor, color: empColor, backgroundColor: `${empColor}20` } : undefined}
                               >
                                 {name}
                               </button>
@@ -1063,8 +1041,8 @@ export default function CallLogsPage() {
                           <ResponsiveContainer width="100%" height="100%" minHeight={300}>
                       <ComposedChart
                         data={singleGraphChartData}
-                        margin={{ top: 32, right: 16, left: 8, bottom: 76 }}
-                        barCategoryGap="16%"
+                        margin={{ top: 32, right: 16, left: 8, bottom: 88 }}
+                        barCategoryGap="8%"
                         barGap={0}
                       >
                         <XAxis
@@ -1084,15 +1062,15 @@ export default function CallLogsPage() {
                           width={28}
                         />
                         <RechartsTooltip content={<CompareTooltip />} />
-                        {selectedCompareEmployees.flatMap((emp, empIdx) => {
-                          const colors = getEmployeeSegmentColors(empIdx);
+                        {selectedCompareEmployees.flatMap((emp) => {
+                          const initials = getInitials(emp);
                           return [
                             <Bar
                               key={`${emp}_incoming`}
                               dataKey={`${emp}_incoming`}
                               name="Incoming"
                               stackId={emp}
-                              fill={colors.incoming}
+                              fill={COMPARE_CALL_TYPE_COLORS.incoming}
                               radius={[0, 0, 0, 0]}
                             >
                               <LabelList
@@ -1103,13 +1081,32 @@ export default function CallLogsPage() {
                                 fontWeight={600}
                                 formatter={(value: any) => (value > 0 ? String(value) : "")}
                               />
+                              <LabelList
+                                dataKey={`${emp}_incoming`}
+                                position="bottom"
+                                content={(props: any) => {
+                                  const payload = props.payload || {};
+                                  const total =
+                                    (Number(payload[`${emp}_incoming`]) || 0) +
+                                    (Number(payload[`${emp}_outgoing`]) || 0) +
+                                    (Number(payload[`${emp}_missed`]) || 0);
+                                  if (total === 0) return null;
+                                  const cx = (props.x || 0) + (props.width || 0) / 2;
+                                  const y = (props.y || 0) + (props.height || 0);
+                                  return (
+                                    <text x={cx} y={y + 14} textAnchor="middle" fill="#f8fafc" fontSize={11} fontWeight={700}>
+                                      {initials}
+                                    </text>
+                                  );
+                                }}
+                              />
                             </Bar>,
                             <Bar
                               key={`${emp}_outgoing`}
                               dataKey={`${emp}_outgoing`}
                               name="Outgoing"
                               stackId={emp}
-                              fill={colors.outgoing}
+                              fill={COMPARE_CALL_TYPE_COLORS.outgoing}
                               radius={[0, 0, 0, 0]}
                             >
                               <LabelList
@@ -1126,7 +1123,7 @@ export default function CallLogsPage() {
                               dataKey={`${emp}_missed`}
                               name="Missed"
                               stackId={emp}
-                              fill={colors.missed}
+                              fill={COMPARE_CALL_TYPE_COLORS.missed}
                               radius={[4, 4, 0, 0]}
                             >
                               <LabelList
@@ -1148,16 +1145,9 @@ export default function CallLogsPage() {
                                     (Number(payload[`${emp}_missed`]) || 0);
                                   if (total === 0) return null;
                                   const cx = (props.x || 0) + (props.width || 0) / 2;
-                                  const y = (props.y ?? 0) - 8;
+                                  const y = props.y ?? 0;
                                   return (
-                                    <text
-                                      x={cx}
-                                      y={y}
-                                      textAnchor="middle"
-                                      fill="#f8fafc"
-                                      fontSize={13}
-                                      fontWeight={700}
-                                    >
+                                    <text x={cx} y={y - 6} textAnchor="middle" fill="#94a3b8" fontSize={11} fontWeight={600}>
                                       {total}
                                     </text>
                                   );
@@ -1176,37 +1166,30 @@ export default function CallLogsPage() {
                 {selectedCompareEmployees.length > 0 && (
                   <div className="pt-3 border-t border-slate-800 space-y-3">
                     <div>
-                      <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Employee (bar color)</div>
+                      <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Employees (initials on bars)</div>
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                        {selectedCompareEmployees.map((emp, idx) => {
-                          const empColor = getEmployeeBaseColor(idx);
-                          return (
-                            <div key={emp} className="flex items-center gap-2">
-                              <span
-                                className="w-3 h-3 rounded-sm shrink-0 border border-slate-600"
-                                style={{ backgroundColor: empColor }}
-                              />
-                              <span className="text-xs font-medium" style={{ color: empColor }}>{emp}</span>
-                              <span className="text-[10px] text-slate-500 font-medium">({getInitials(emp)})</span>
-                            </div>
-                          );
-                        })}
+                        {selectedCompareEmployees.map((emp) => (
+                          <div key={emp} className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold text-slate-400">{getInitials(emp)}</span>
+                            <span className="text-xs text-slate-300">= {emp}</span>
+                          </div>
+                        ))}
                       </div>
                     </div>
                     <div>
-                      <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Within each bar (segment)</div>
+                      <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Segment colors (call type)</div>
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
                         <span className="flex items-center gap-1.5">
-                          <span className="w-3 h-2 rounded-sm" style={{ backgroundColor: EMPLOYEE_SEGMENT_COLORS[0][0] }} />
-                          Dark = Incoming
+                          <span className="w-3 h-2 rounded-sm bg-emerald-500" />
+                          Incoming
                         </span>
                         <span className="flex items-center gap-1.5">
-                          <span className="w-3 h-2 rounded-sm" style={{ backgroundColor: EMPLOYEE_SEGMENT_COLORS[0][1] }} />
-                          Medium = Outgoing
+                          <span className="w-3 h-2 rounded-sm bg-sky-500" />
+                          Outgoing
                         </span>
                         <span className="flex items-center gap-1.5">
-                          <span className="w-3 h-2 rounded-sm" style={{ backgroundColor: EMPLOYEE_SEGMENT_COLORS[0][2] }} />
-                          Light = Missed
+                          <span className="w-3 h-2 rounded-sm bg-rose-500" />
+                          Missed
                         </span>
                       </div>
                     </div>
