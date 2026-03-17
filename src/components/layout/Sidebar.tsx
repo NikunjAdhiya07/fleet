@@ -47,7 +47,7 @@ export function Sidebar() {
           // Base styles — always present
           "flex flex-col h-full bg-slate-900 border-r border-slate-800 text-slate-300 z-40",
           // Desktop: static, always visible, fixed width
-          "sm:relative sm:translate-x-0 sm:w-64 sm:flex",
+          "sm:relative sm:translate-x-0 sm:w-56 sm:flex",
           // Mobile: fixed drawer, slides in/out
           "fixed top-0 left-0 bottom-0 w-72 transition-transform duration-300 ease-in-out",
           isOpen ? "translate-x-0" : "-translate-x-full sm:translate-x-0"

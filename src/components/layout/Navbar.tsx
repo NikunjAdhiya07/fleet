@@ -14,8 +14,8 @@ export function Navbar() {
   };
 
   return (
-    <header className="h-16 flex items-center justify-between px-4 sm:px-6 bg-slate-900 border-b border-slate-800 shadow-sm z-20 w-full text-slate-100 flex-shrink-0">
-      <div className="flex items-center gap-3">
+    <header className="h-16 flex items-center justify-between px-3 sm:px-6 bg-slate-900 border-b border-slate-800 shadow-sm z-20 w-full text-slate-100 flex-shrink-0 min-w-0 overflow-hidden">
+      <div className="flex items-center gap-2 min-w-0">
         {/* Hamburger — only visible on mobile */}
         <button
           onClick={toggle}
@@ -37,13 +37,13 @@ export function Navbar() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-4">
+      <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
         {session?.user && (
-          <div className="flex items-center gap-2 sm:gap-4">
-            <div className="flex items-center gap-2 bg-slate-800 px-2.5 sm:px-3 py-1.5 rounded-full border border-slate-700">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-1.5 bg-slate-800 px-2 sm:px-3 py-1.5 rounded-full border border-slate-700">
               <User className="w-4 h-4 text-indigo-400 flex-shrink-0" />
               <div className="flex flex-col leading-none">
-                <span className="text-sm font-medium truncate max-w-[100px] sm:max-w-none">
+                <span className="text-sm font-medium truncate max-w-[80px] sm:max-w-[120px]">
                   {session.user.name || "Admin"}
                 </span>
                 <span className="text-xs text-slate-400 uppercase tracking-wider hidden sm:block">
