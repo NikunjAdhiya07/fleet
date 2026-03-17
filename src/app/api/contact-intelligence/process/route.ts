@@ -63,8 +63,12 @@ export async function GET(req: Request) {
     const since = checkpoint.lastProcessedAt;
     const runAt = new Date();
 
+    // Skip calls created in the last 2 minutes — /api/calls already runs
+    // intelligence inline, so re-processing them causes duplicate messages.
+    const recentCutoff = new Date(Date.now() - 2 * 60 * 1000);
+
     const [newDeviceCalls, newDriverCalls] = await Promise.all([
-      DeviceCallLog.find({ createdAt: { $gt: since } }).lean(),
+      DeviceCallLog.find({ createdAt: { $gt: since, $lt: recentCutoff } }).lean(),
       CallLog.find({ createdAt: { $gt: since } }).lean()
     ]);
 

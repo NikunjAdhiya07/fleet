@@ -88,12 +88,13 @@ export async function runContactIntelligence(
       const lastReminderAt = identified.lastReminderSentAt ? new Date(identified.lastReminderSentAt).getTime() : 0;
       const reminderCooldown = Date.now() - lastReminderAt < CATEGORY_REQUEST_COOLDOWN_MS;
       if (!identified.savedInPhone && !identified.remindLater && chatId && !reminderCooldown) {
-        await log('info', 'REMINDER', `Sending save-to-phone reminder`, undefined, employeeName, phoneNumber);
-        await sendSmartReminder(chatId, phoneNumber, employeeName, identified.contactName, identified.category);
+        // Set timestamp BEFORE sending to prevent race conditions
         await IdentifiedContact.updateOne(
           { phoneNumber, employeeName },
           { $set: { lastReminderSentAt: new Date() } }
         );
+        await log('info', 'REMINDER', `Sending save-to-phone reminder`, undefined, employeeName, phoneNumber);
+        await sendSmartReminder(chatId, phoneNumber, employeeName, identified.contactName, identified.category);
       }
       return;
     }
@@ -137,13 +138,14 @@ export async function runContactIntelligence(
       }
 
       if (chatId) {
-        await log('info', 'SENDING_CATEGORY', `Sending category keyboard to chatId ${chatId} for "${name}"`, undefined, employeeName, phoneNumber);
-        const result = await sendCategoryRequest(chatId, name, phoneNumber, employeeName);
-        await log('success', 'MESSAGE_SENT', `Category keyboard sent successfully`, { telegramResult: result }, employeeName, phoneNumber);
+        // Set timestamp BEFORE sending to prevent race conditions with concurrent runs
         await IdentifiedContact.updateOne(
           { phoneNumber, employeeName },
           { $set: { categoryRequestSentAt: new Date() } }
         );
+        await log('info', 'SENDING_CATEGORY', `Sending category keyboard to chatId ${chatId} for "${name}"`, undefined, employeeName, phoneNumber);
+        const result = await sendCategoryRequest(chatId, name, phoneNumber, employeeName);
+        await log('success', 'MESSAGE_SENT', `Category keyboard sent successfully`, { telegramResult: result }, employeeName, phoneNumber);
       } else {
         await log('warn', 'NO_CHATID', `Cannot send Telegram — employee "${employeeName}" has no linked Telegram chatId. They need to open the bot, send /start, then send their 10-digit phone number.`, undefined, employeeName, phoneNumber);
       }
@@ -169,12 +171,15 @@ export async function runContactIntelligence(
 
     if (tracker.status === 'tracking' && tracker.callCount >= CALL_THRESHOLD && chatId) {
       await log('info', 'THRESHOLD_REACHED', `Threshold of ${CALL_THRESHOLD} calls reached — sending name request to chatId ${chatId}`, undefined, employeeName, phoneNumber);
+      // Set status BEFORE sending to prevent race conditions with concurrent runs
+      tracker.status = 'awaiting_name';
+      await tracker.save();
+
       const result = await sendNameRequest(chatId, phoneNumber, employeeName, tracker.callCount);
       const sent = result?.ok === true;
       const messageId = result?.result?.message_id;
 
       if (sent) {
-        tracker.status = 'awaiting_name';
         if (messageId) tracker.telegramMessageId = messageId;
         await tracker.save();
         await log('success', 'NAME_REQUEST_SENT', `Name request sent — messageId: ${messageId}`, { telegramResult: result }, employeeName, phoneNumber);
@@ -198,11 +203,12 @@ export async function runContactIntelligence(
       const lastReminderAt = identified?.lastReminderSentAt ? new Date(identified.lastReminderSentAt).getTime() : 0;
       const reminderCooldown = lastReminderAt && Date.now() - lastReminderAt < CATEGORY_REQUEST_COOLDOWN_MS;
       if (identified && !identified.savedInPhone && !identified.remindLater && chatId && !reminderCooldown) {
-        await sendSmartReminder(chatId, phoneNumber, employeeName, identified.contactName ?? null, identified.category ?? '');
+        // Set timestamp BEFORE sending to prevent race conditions
         await IdentifiedContact.updateOne(
           { phoneNumber, employeeName },
           { $set: { lastReminderSentAt: new Date() } }
         );
+        await sendSmartReminder(chatId, phoneNumber, employeeName, identified.contactName ?? null, identified.category ?? '');
       }
     } else {
       await log('info', 'TRACKING', `Tracking ${tracker.callCount}/${CALL_THRESHOLD} calls — no action yet`, undefined, employeeName, phoneNumber);
@@ -288,10 +294,19 @@ export async function runDailyPendingReminders(): Promise<{ category: number; na
   const now = new Date();
 
   // 1. Scenario A: IdentifiedContact with name but no category — re-send category keyboard
+  //    Skip if category request was already sent within the last 24h
+  const categoryCooldownCutoff = new Date(Date.now() - CATEGORY_REQUEST_COOLDOWN_MS);
   const pendingCategory = await IdentifiedContact.find({
     contactName: { $exists: true, $nin: [null, ''] },
-    $or: [{ category: null }, { category: { $exists: false } }],
     telegramChatId: { $exists: true, $nin: [null, ''] },
+    $and: [
+      { $or: [{ category: null }, { category: { $exists: false } }] },
+      { $or: [
+        { categoryRequestSentAt: null },
+        { categoryRequestSentAt: { $exists: false } },
+        { categoryRequestSentAt: { $lt: categoryCooldownCutoff } },
+      ]},
+    ],
   }).lean() as any[];
 
   for (const c of pendingCategory) {
@@ -307,14 +322,24 @@ export async function runDailyPendingReminders(): Promise<{ category: number; na
     }
   }
 
-  // 2. Scenario B: UnknownNumberTracker awaiting_name — re-send name request (need chatId from EmployeeTelegram)
-  const pendingName = await UnknownNumberTracker.find({ status: 'awaiting_name' }).lean() as any[];
+  // 2. Scenario B: UnknownNumberTracker awaiting_name — re-send name request only
+  //    if message was never delivered (no telegramMessageId)
+  const pendingName = await UnknownNumberTracker.find({
+    status: 'awaiting_name',
+    $or: [{ telegramMessageId: null }, { telegramMessageId: { $exists: false } }],
+  }).lean() as any[];
   for (const t of pendingName) {
     try {
       const emp = await EmployeeTelegram.findOne({ employeeName: new RegExp(`^${escapeRegex(t.employeeName)}$`, 'i') }).lean() as any;
       const chatId = emp?.telegramChatId;
       if (!chatId) continue;
-      await sendNameRequest(chatId, t.phoneNumber, t.employeeName, t.callCount ?? 5);
+      const result = await sendNameRequest(chatId, t.phoneNumber, t.employeeName, t.callCount ?? 5);
+      if (result?.ok === true && result?.result?.message_id) {
+        await UnknownNumberTracker.updateOne(
+          { phoneNumber: t.phoneNumber, employeeName: t.employeeName },
+          { $set: { telegramMessageId: result.result.message_id } }
+        );
+      }
       counts.nameRequest++;
     } catch (err) {
       console.error(`[DailyReminder] Name request send failed for ${t.phoneNumber}:`, err);
@@ -322,12 +347,19 @@ export async function runDailyPendingReminders(): Promise<{ category: number; na
   }
 
   // 3. Save reminder: IdentifiedContact with category but not saved, not remindLater
+  //    Skip if reminder was already sent within the last 24h
+  const reminderCooldownCutoff = new Date(Date.now() - CATEGORY_REQUEST_COOLDOWN_MS);
   const pendingSave = await IdentifiedContact.find({
     contactName: { $exists: true, $ne: null },
     category: { $exists: true, $ne: null },
     savedInPhone: false,
     remindLater: { $ne: true },
     telegramChatId: { $exists: true, $nin: [null, ''] },
+    $or: [
+      { lastReminderSentAt: null },
+      { lastReminderSentAt: { $exists: false } },
+      { lastReminderSentAt: { $lt: reminderCooldownCutoff } },
+    ],
   }).lean() as any[];
 
   for (const c of pendingSave) {
