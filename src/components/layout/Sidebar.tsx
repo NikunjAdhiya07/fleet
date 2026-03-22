@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users, Map, Navigation, CreditCard, Phone, UserCog, FileText, X, Activity, Contact, Trash2, PieChart, BrainCircuit, BotMessageSquare, ScrollText, UserCheck } from "lucide-react";
+import { LayoutDashboard, Users, Map, Navigation, CreditCard, Phone, UserCog, FileText, X, Activity, Contact, Trash2, PieChart, BrainCircuit, BotMessageSquare, ScrollText, UserCheck, Smartphone } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "./SidebarContext";
 
@@ -19,6 +19,7 @@ const sidebarNavItems = [
   { title: "Telegram Setup", href: "/telegram-setup", icon: BotMessageSquare },
   { title: "Bot Logs", href: "/bot-logs", icon: ScrollText },
   { title: "App Active Status", href: "/toggle-logs", icon: Activity },
+  { title: "Phone App Logs", href: "/device-app-logs", icon: Smartphone },
   { title: "Contact Bank", href: "/contacts", icon: Contact },
   { title: "User Management", href: "/users", icon: UserCog },
   { title: "Reports", href: "/reports", icon: FileText },
@@ -47,7 +48,7 @@ export function Sidebar() {
           // Base styles — always present
           "flex flex-col h-full bg-slate-900 border-r border-slate-800 text-slate-300 z-40",
           // Desktop: static, always visible, fixed width
-          "sm:relative sm:translate-x-0 sm:w-56 sm:flex",
+          "sm:relative sm:translate-x-0 sm:w-64 sm:flex",
           // Mobile: fixed drawer, slides in/out
           "fixed top-0 left-0 bottom-0 w-72 transition-transform duration-300 ease-in-out",
           isOpen ? "translate-x-0" : "-translate-x-full sm:translate-x-0"
