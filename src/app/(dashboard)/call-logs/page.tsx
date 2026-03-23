@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Search, Loader2, Calendar as CalendarIcon, User, ArrowRight, ArrowLeftRight, Plus } from "lucide-react";
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Search, Loader2, Calendar as CalendarIcon, User, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle } from "lucide-react";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
@@ -69,6 +69,8 @@ export default function CallLogsPage() {
   const [selectedCompareEmployees, setSelectedCompareEmployees] = useState<string[]>([]);
   const [compareXAxisMode, setCompareXAxisMode] = useState<"hour" | "date">("hour");
   const [isDesktop, setIsDesktop] = useState(true);
+  const [fcmWakeState, setFcmWakeState] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [fcmWakeMsg, setFcmWakeMsg] = useState("");
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 640px)");
@@ -77,6 +79,28 @@ export default function CallLogsPage() {
     mq.addEventListener("change", set);
     return () => mq.removeEventListener("change", set);
   }, []);
+
+  const triggerFcmWake = async () => {
+    setFcmWakeState("loading");
+    setFcmWakeMsg("");
+    try {
+      const res = await fetch("/api/fcm-wake", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const { sent = 0, staleDevices = 0, tokensFound = 0 } = data;
+        setFcmWakeMsg(`Sent ${sent}/${tokensFound} push(es) to ${staleDevices} stale device(s)`);
+        setFcmWakeState("success");
+      } else {
+        setFcmWakeMsg(data.error ?? "Unknown error");
+        setFcmWakeState("error");
+      }
+    } catch (e: any) {
+      setFcmWakeMsg(e.message ?? "Network error");
+      setFcmWakeState("error");
+    } finally {
+      setTimeout(() => setFcmWakeState("idle"), 5000);
+    }
+  };
 
   // When in compare mode and employees load, default to all selected if none selected yet
   const employeeNames = useMemo(() => {
@@ -626,7 +650,7 @@ export default function CallLogsPage() {
 
   return (
     <div className="space-y-5 relative">
-      {/* Compact stats */}
+      {/* Compact stats + FCM Wake button */}
       <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-slate-400">
         <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1">
           <span className="font-medium text-slate-300">Total Calls:</span>
@@ -637,6 +661,45 @@ export default function CallLogsPage() {
           <span className="font-medium text-slate-300">Showing:</span>
           <span className="text-slate-100 font-semibold">{filteredLogs.length}</span>
         </span>
+
+        {/* FCM Wake-Up button */}
+        <div className="ml-auto flex items-center gap-2">
+          {fcmWakeMsg && (
+            <span className={cn(
+              "text-xs px-2 py-1 rounded-full border flex items-center gap-1.5",
+              fcmWakeState === "success"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                : "border-rose-500/30 bg-rose-500/10 text-rose-400"
+            )}>
+              {fcmWakeState === "success"
+                ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                : <XCircle className="w-3.5 h-3.5 shrink-0" />}
+              {fcmWakeMsg}
+            </span>
+          )}
+          <button
+            id="fcm-wake-btn"
+            onClick={triggerFcmWake}
+            disabled={fcmWakeState === "loading"}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all duration-200",
+              fcmWakeState === "loading"
+                ? "bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed"
+                : fcmWakeState === "success"
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                : fcmWakeState === "error"
+                ? "bg-rose-500/10 border-rose-500/30 text-rose-400"
+                : "bg-indigo-600/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/20 hover:border-indigo-400/50 hover:text-indigo-300"
+            )}
+          >
+            {fcmWakeState === "loading" ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <BellRing className="w-3.5 h-3.5" />
+            )}
+            {fcmWakeState === "loading" ? "Sending..." : "Wake Devices"}
+          </button>
+        </div>
       </div>
 
       {/* Employee Filter Buttons */}
