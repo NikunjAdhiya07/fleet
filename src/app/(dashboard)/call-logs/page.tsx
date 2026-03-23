@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, Search, Loader2, Calendar as CalendarIcon, User, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle } from "lucide-react";
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, Calendar as CalendarIcon, User, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle } from "lucide-react";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
@@ -340,6 +340,12 @@ export default function CallLogsPage() {
       return (
         <Badge className={cn("bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20 gap-1.5 rounded-full px-2.5 py-1", className)}>
           <PhoneMissed className="w-3.5 h-3.5" /> Missed
+        </Badge>
+      );
+    if (callType === "UNKNOWN")
+      return (
+        <Badge className={cn("bg-slate-500/10 text-slate-400 hover:bg-slate-500/20 border border-slate-500/20 gap-1.5 rounded-full px-2.5 py-1", className)}>
+          <HelpCircle className="w-3.5 h-3.5" /> Unknown
         </Badge>
       );
     return null;

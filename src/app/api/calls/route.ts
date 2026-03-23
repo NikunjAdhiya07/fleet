@@ -5,6 +5,12 @@ import BotLog from "@/models/BotLog";
 import { runContactIntelligence } from "@/lib/contactIntelligence";
 import mongoose from "mongoose";
 
+function normalizeCallType(raw: unknown): string {
+  const u = String(raw ?? "").toUpperCase().trim();
+  if (["INCOMING", "OUTGOING", "MISSED", "UNKNOWN"].includes(u)) return u;
+  return "UNKNOWN";
+}
+
 // POST — called by the Android app (authenticated via X-API-Key)
 export async function POST(req: Request) {
   try {
@@ -34,7 +40,7 @@ export async function POST(req: Request) {
     const callLog = await DeviceCallLog.create({
       phoneNumber,
       contactName: contactName || "Unknown",
-      callType: String(callType).toUpperCase(),
+      callType: normalizeCallType(callType),
       duration: duration || 0,
       timestamp: timestamp ? new Date(Number(timestamp)) : new Date(),
       deviceId,

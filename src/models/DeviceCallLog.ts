@@ -5,7 +5,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface IDeviceCallLog extends Document {
   phoneNumber: string;
   contactName: string;
-  callType: 'INCOMING' | 'OUTGOING' | 'MISSED';
+  callType: 'INCOMING' | 'OUTGOING' | 'MISSED' | 'UNKNOWN';
   duration: number;
   timestamp: Date;
   deviceId: string;
@@ -18,7 +18,7 @@ const DeviceCallLogSchema = new Schema(
   {
     phoneNumber: { type: String, required: true, trim: true },
     contactName: { type: String, default: 'Unknown' },
-    callType: { type: String, enum: ['INCOMING', 'OUTGOING', 'MISSED'], required: true },
+    callType: { type: String, enum: ['INCOMING', 'OUTGOING', 'MISSED', 'UNKNOWN'], required: true },
     duration: { type: Number, default: 0 },
     timestamp: { type: Date, required: true },
     deviceId: { type: String, required: true },

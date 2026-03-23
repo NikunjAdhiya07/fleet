@@ -3,7 +3,7 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface ICallLog extends Document {
   driverId: mongoose.Types.ObjectId;
   phoneNumber: string;
-  callType: 'INCOMING' | 'OUTGOING' | 'MISSED';
+  callType: 'INCOMING' | 'OUTGOING' | 'MISSED' | 'UNKNOWN';
   duration: number;
   timestamp: Date;
   syncedAt: Date;
@@ -16,7 +16,7 @@ const CallLogSchema = new Schema(
   {
     driverId: { type: Schema.Types.ObjectId, ref: 'Driver', required: true },
     phoneNumber: { type: String, required: true },
-    callType: { type: String, enum: ['INCOMING', 'OUTGOING', 'MISSED'], required: true },
+    callType: { type: String, enum: ['INCOMING', 'OUTGOING', 'MISSED', 'UNKNOWN'], required: true },
     duration: { type: Number, required: true },
     timestamp: { type: Date, required: true },
     syncedAt: { type: Date, required: true },
