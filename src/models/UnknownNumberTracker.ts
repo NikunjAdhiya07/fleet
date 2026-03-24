@@ -10,6 +10,8 @@ export interface IUnknownNumberTracker extends Document {
   firstSeen: Date;
   lastSeen: Date;
   telegramMessageId?: number;
+  /** Set when a name-request Telegram was successfully sent — prevents duplicate sends. */
+  nameRequestSentAt?: Date;
   status: TrackerStatus;
 }
 
@@ -22,6 +24,7 @@ const UnknownNumberTrackerSchema = new Schema(
     firstSeen: { type: Date, required: true },
     lastSeen: { type: Date, required: true },
     telegramMessageId: { type: Number },
+    nameRequestSentAt: { type: Date },
     status: {
       type: String,
       enum: ['tracking', 'awaiting_name', 'awaiting_category', 'identified'],

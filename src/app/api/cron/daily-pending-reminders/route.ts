@@ -4,10 +4,8 @@ import { runDailyPendingReminders } from "@/lib/contactIntelligence";
 /**
  * GET/POST /api/cron/daily-pending-reminders
  *
- * Re-sends Telegram messages for all pending items (no reply yet):
- * - Category not chosen → send category keyboard again
- * - Name not submitted (Scenario B) → send name request again
- * - Save not confirmed → send "confirm you've saved" again
+ * Scenario A/B: only recovery sends (never got the first Telegram). No repeat nags for the same number.
+ * Save reminder: contacts with category but not savedInPhone (still uses lastReminderSentAt cooldown in the engine).
  *
  * Called daily at 8 AM by Vercel Cron. Secure with CRON_SECRET.
  * Single daily run keeps within Vercel Hobby cron limits (1 run/day min interval).

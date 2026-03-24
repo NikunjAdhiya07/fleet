@@ -28,7 +28,7 @@ import {
 } from '@/lib/telegram';
 
 const CALL_THRESHOLD = 5;
-/** Don't re-send "classify this contact" more than once per 24h to avoid spam. */
+/** Cooldown for "save contact in phone" reminders after the contact is fully classified. */
 const CATEGORY_REQUEST_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 function escapeRegex(s: string) {
@@ -127,23 +127,48 @@ export async function runContactIntelligence(
         await log('info', 'IDENTIFIED_CREATED', `Created IdentifiedContact for "${name}"`, undefined, employeeName, phoneNumber);
       }
 
-      // Send category request at most once per cooldown to avoid spam (same contact every 10s)
-      const contactForCategory = await IdentifiedContact.findOne({ phoneNumber, employeeName }).lean();
-      const lastSentAt = contactForCategory?.categoryRequestSentAt ? new Date((contactForCategory as any).categoryRequestSentAt).getTime() : 0;
-      const withinCooldown = lastSentAt && Date.now() - lastSentAt < CATEGORY_REQUEST_COOLDOWN_MS;
-      if (withinCooldown) {
-        await log('info', 'SKIP_CATEGORY_COOLDOWN', `Already sent category request recently for "${name}" — skipping to avoid spam`, undefined, employeeName, phoneNumber);
-        return;
-      }
-
+      // One category Telegram per (phone, employee) until category is chosen — atomic claim avoids duplicates under concurrent calls / process retries
       if (chatId) {
+        const claimed = await IdentifiedContact.findOneAndUpdate(
+          {
+            phoneNumber,
+            employeeName,
+            contactName: { $exists: true, $nin: [null, ''] },
+            category: null,
+            categoryRequestSentAt: null,
+          },
+          { $set: { categoryRequestSentAt: new Date() } },
+          { new: true }
+        );
+
+        if (!claimed) {
+          await log(
+            'info',
+            'SKIP_CATEGORY_ALREADY_SENT',
+            `Category Telegram already sent for "${name}" — not sending again until category is chosen`,
+            undefined,
+            employeeName,
+            phoneNumber
+          );
+          return;
+        }
+
         await log('info', 'SENDING_CATEGORY', `Sending category keyboard to chatId ${chatId} for "${name}"`, undefined, employeeName, phoneNumber);
         const result = await sendCategoryRequest(chatId, name, phoneNumber, employeeName);
-        await log('success', 'MESSAGE_SENT', `Category keyboard sent successfully`, { telegramResult: result }, employeeName, phoneNumber);
-        await IdentifiedContact.updateOne(
-          { phoneNumber, employeeName },
-          { $set: { categoryRequestSentAt: new Date() } }
-        );
+        const sent = result?.ok === true;
+        if (sent) {
+          await log('success', 'MESSAGE_SENT', `Category keyboard sent successfully`, { telegramResult: result }, employeeName, phoneNumber);
+        } else {
+          await IdentifiedContact.updateOne({ phoneNumber, employeeName }, { $unset: { categoryRequestSentAt: 1 } });
+          await log(
+            'error',
+            'MESSAGE_SEND_FAILED',
+            `Category keyboard failed — cleared claim for retry`,
+            { telegramResult: result },
+            employeeName,
+            phoneNumber
+          );
+        }
       } else {
         await log('warn', 'NO_CHATID', `Cannot send Telegram — employee "${employeeName}" has no linked Telegram chatId. They need to open the bot, send /start, then send their 10-digit phone number.`, undefined, employeeName, phoneNumber);
       }
@@ -167,32 +192,86 @@ export async function runContactIntelligence(
 
     await log('info', 'TRACKER_UPDATED', `Call count: ${tracker.callCount}/${CALL_THRESHOLD}, status: "${tracker.status}"`, { tracker: { callCount: tracker.callCount, status: tracker.status } }, employeeName, phoneNumber);
 
-    if (tracker.status === 'tracking' && tracker.callCount >= CALL_THRESHOLD && chatId) {
-      await log('info', 'THRESHOLD_REACHED', `Threshold of ${CALL_THRESHOLD} calls reached — sending name request to chatId ${chatId}`, undefined, employeeName, phoneNumber);
-      const result = await sendNameRequest(chatId, phoneNumber, employeeName, tracker.callCount);
-      const sent = result?.ok === true;
-      const messageId = result?.result?.message_id;
+    if (tracker.callCount >= CALL_THRESHOLD && chatId) {
+      if (tracker.status === 'tracking') {
+        // Only one concurrent flow may pass threshold → awaiting_name; avoids duplicate Telegram on 6th+ calls or parallel requests
+        const transitioned = await UnknownNumberTracker.findOneAndUpdate(
+          { _id: tracker._id, status: 'tracking', callCount: { $gte: CALL_THRESHOLD } },
+          { $set: { status: 'awaiting_name' } },
+          { new: true }
+        );
 
-      if (sent) {
-        tracker.status = 'awaiting_name';
-        if (messageId) tracker.telegramMessageId = messageId;
-        await tracker.save();
-        await log('success', 'NAME_REQUEST_SENT', `Name request sent — messageId: ${messageId}`, { telegramResult: result }, employeeName, phoneNumber);
-      } else {
-        await log('error', 'NAME_REQUEST_FAILED', `Failed to send Telegram name request (ok=${result?.ok}) — will retry on next run`, { telegramResult: result }, employeeName, phoneNumber);
+        if (!transitioned) {
+          await log(
+            'info',
+            'SKIP_NAME_THRESHOLD_RACE',
+            `Threshold already handled by another request for ${phoneNumber}`,
+            undefined,
+            employeeName,
+            phoneNumber
+          );
+        } else {
+          await log(
+            'info',
+            'THRESHOLD_REACHED',
+            `Threshold of ${CALL_THRESHOLD} calls reached — sending name request to chatId ${chatId}`,
+            undefined,
+            employeeName,
+            phoneNumber
+          );
+          const result = await sendNameRequest(chatId, phoneNumber, employeeName, transitioned.callCount);
+          const sent = result?.ok === true;
+          const messageId = result?.result?.message_id;
+
+          if (sent) {
+            const setFields: Record<string, unknown> = { nameRequestSentAt: new Date() };
+            if (messageId != null) setFields.telegramMessageId = messageId;
+            await UnknownNumberTracker.updateOne({ _id: tracker._id }, { $set: setFields });
+            await log(
+              'success',
+              'NAME_REQUEST_SENT',
+              `Name request sent — messageId: ${messageId}`,
+              { telegramResult: result },
+              employeeName,
+              phoneNumber
+            );
+          } else {
+            await UnknownNumberTracker.updateOne({ _id: tracker._id }, { $set: { status: 'tracking' } });
+            await log(
+              'error',
+              'NAME_REQUEST_FAILED',
+              `Failed to send Telegram name request (ok=${result?.ok}) — reverted to tracking for retry`,
+              { telegramResult: result },
+              employeeName,
+              phoneNumber
+            );
+          }
+        }
+      } else if (
+        tracker.status === 'awaiting_name' &&
+        !tracker.telegramMessageId &&
+        !tracker.nameRequestSentAt
+      ) {
+        await log(
+          'info',
+          'NAME_REQUEST_RETRY',
+          `Retrying name request (never successfully sent) for ${phoneNumber}`,
+          undefined,
+          employeeName,
+          phoneNumber
+        );
+        const result = await sendNameRequest(chatId, phoneNumber, employeeName, tracker.callCount ?? CALL_THRESHOLD);
+        if (result?.ok === true) {
+          const setFields: Record<string, unknown> = { nameRequestSentAt: new Date() };
+          if (result?.result?.message_id != null) {
+            setFields.telegramMessageId = result.result.message_id;
+          }
+          await UnknownNumberTracker.updateOne({ _id: tracker._id }, { $set: setFields });
+          await log('success', 'NAME_REQUEST_RETRY_SENT', `Name request sent on retry`, { telegramResult: result }, employeeName, phoneNumber);
+        }
       }
-
     } else if (tracker.status === 'tracking' && tracker.callCount >= CALL_THRESHOLD && !chatId) {
       await log('warn', 'THRESHOLD_NO_CHATID', `5 calls reached but employee "${employeeName}" has no Telegram linked — cannot send name request`, undefined, employeeName, phoneNumber);
-
-    } else if (tracker.status === 'awaiting_name' && chatId && !tracker.telegramMessageId) {
-      await log('info', 'NAME_REQUEST_RETRY', `Retrying name request (no messageId stored) for ${phoneNumber}`, undefined, employeeName, phoneNumber);
-      const result = await sendNameRequest(chatId, phoneNumber, employeeName, tracker.callCount ?? CALL_THRESHOLD);
-      if (result?.ok === true && result?.result?.message_id) {
-        tracker.telegramMessageId = result.result.message_id;
-        await tracker.save();
-        await log('success', 'NAME_REQUEST_RETRY_SENT', `Name request sent on retry — messageId: ${tracker.telegramMessageId}`, undefined, employeeName, phoneNumber);
-      }
 
     } else if (tracker.status !== 'tracking' && tracker.status !== 'awaiting_name' && tracker.status !== 'awaiting_category') {
       const lastReminderAt = identified?.lastReminderSentAt ? new Date(identified.lastReminderSentAt).getTime() : 0;
@@ -277,45 +356,59 @@ async function sendSmartReminder(
 }
 
 /**
- * Daily 8 AM job: re-send Telegram messages for all pending items (no reply yet).
- * - Scenario A: contact has name but no category → send category keyboard again
- * - Scenario B: tracker awaiting_name → send name request again
- * - Save reminder: contact has category but not savedInPhone → send confirmation again
+ * Daily 8 AM job: resend only stale pending prompts.
+ * Rule:
+ * - Do NOT spam daily.
+ * - Re-send Scenario A / B only if the last successful prompt is older than 2 days and still unresolved.
  */
 export async function runDailyPendingReminders(): Promise<{ category: number; nameRequest: number; saveReminder: number }> {
   await connectToDatabase();
   const counts = { category: 0, nameRequest: 0, saveReminder: 0 };
   const now = new Date();
+  const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
 
-  // 1. Scenario A: IdentifiedContact with name but no category — re-send category keyboard
+  // 1. Scenario A: unresolved category and last category prompt is older than 2 days
   const pendingCategory = await IdentifiedContact.find({
     contactName: { $exists: true, $nin: [null, ''] },
     $or: [{ category: null }, { category: { $exists: false } }],
     telegramChatId: { $exists: true, $nin: [null, ''] },
+    categoryRequestSentAt: { $lte: twoDaysAgo },
   }).lean() as any[];
 
   for (const c of pendingCategory) {
     try {
-      await sendCategoryRequest(c.telegramChatId, c.contactName, c.phoneNumber, c.employeeName);
-      await IdentifiedContact.updateOne(
-        { phoneNumber: c.phoneNumber, employeeName: c.employeeName },
-        { $set: { categoryRequestSentAt: now } }
-      );
-      counts.category++;
+      const result = await sendCategoryRequest(c.telegramChatId, c.contactName, c.phoneNumber, c.employeeName);
+      if (result?.ok === true) {
+        await IdentifiedContact.updateOne(
+          { phoneNumber: c.phoneNumber, employeeName: c.employeeName },
+          { $set: { categoryRequestSentAt: new Date() } }
+        );
+        counts.category++;
+      }
     } catch (err) {
       console.error(`[DailyReminder] Category send failed for ${c.phoneNumber}:`, err);
     }
   }
 
-  // 2. Scenario B: UnknownNumberTracker awaiting_name — re-send name request (need chatId from EmployeeTelegram)
-  const pendingName = await UnknownNumberTracker.find({ status: 'awaiting_name' }).lean() as any[];
+  // 2. Scenario B: awaiting name and last name-request prompt is older than 2 days
+  const pendingName = await UnknownNumberTracker.find({
+    status: 'awaiting_name',
+    nameRequestSentAt: { $lte: twoDaysAgo },
+  }).lean() as any[];
   for (const t of pendingName) {
     try {
       const emp = await EmployeeTelegram.findOne({ employeeName: new RegExp(`^${escapeRegex(t.employeeName)}$`, 'i') }).lean() as any;
       const chatId = emp?.telegramChatId;
       if (!chatId) continue;
-      await sendNameRequest(chatId, t.phoneNumber, t.employeeName, t.callCount ?? 5);
-      counts.nameRequest++;
+      const result = await sendNameRequest(chatId, t.phoneNumber, t.employeeName, t.callCount ?? 5);
+      if (result?.ok === true) {
+        const setFields: Record<string, unknown> = { nameRequestSentAt: new Date() };
+        if (result?.result?.message_id != null) {
+          setFields.telegramMessageId = result.result.message_id;
+        }
+        await UnknownNumberTracker.updateOne({ _id: t._id }, { $set: setFields });
+        counts.nameRequest++;
+      }
     } catch (err) {
       console.error(`[DailyReminder] Name request send failed for ${t.phoneNumber}:`, err);
     }

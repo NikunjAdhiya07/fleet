@@ -12,7 +12,7 @@ export interface IIdentifiedContact extends Document {
   remindLater: boolean;
   telegramChatId?: string;
   identifiedAt?: Date;
-  /** When we last sent a "classify this contact" Telegram message; used to avoid spam. */
+  /** When we first sent the "classify this contact" Telegram message; no repeat until category is set. */
   categoryRequestSentAt?: Date;
   /** When we last sent a "confirm you've saved" reminder; used to avoid spam. */
   lastReminderSentAt?: Date;

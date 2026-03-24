@@ -130,7 +130,7 @@ export async function GET(req: Request) {
         employeeName: { $in: Array.from(linkedNames) },
         $or: [
           { status: "tracking", callCount: { $gte: 5 } },
-          { status: "awaiting_name", $or: [{ telegramMessageId: null }, { telegramMessageId: { $exists: false } }] },
+          { status: "awaiting_name", telegramMessageId: null, nameRequestSentAt: null },
         ],
       }).lean();
 
