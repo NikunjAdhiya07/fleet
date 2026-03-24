@@ -2,6 +2,28 @@ import { GoogleAuth, type JWTInput } from "google-auth-library";
 import connectToDatabase from "@/lib/db";
 import mongoose from "mongoose";
 
+/** Parse service account JSON from env (handles over-escaped quotes from .env files). */
+function parseFirebaseServiceAccountJson(raw: string): JWTInput & { project_id?: string } {
+  const s = raw.trim();
+  const asAccount = (input: string) => JSON.parse(input) as JWTInput & { project_id?: string };
+
+  try {
+    return asAccount(s);
+  } catch {
+    try {
+      return asAccount(s.replace(/\\"/g, '"'));
+    } catch {
+      try {
+        return asAccount(JSON.parse(s) as string);
+      } catch (e) {
+        throw new Error(
+          `Invalid FIREBASE_SERVICE_ACCOUNT_JSON: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+    }
+  }
+}
+
 export type FcmWakeResult = {
   success: true;
   mode?: "stale" | "all";
@@ -24,7 +46,7 @@ export async function runFcmWakeForStaleDevices(hours: number): Promise<FcmWakeR
     throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not set");
   }
 
-  const serviceAccount = JSON.parse(raw) as JWTInput & { project_id?: string };
+  const serviceAccount = parseFirebaseServiceAccountJson(raw);
   const projectId = serviceAccount.project_id;
   if (!projectId) {
     throw new Error("Invalid service account: missing project_id");
@@ -151,7 +173,7 @@ export async function runFcmWakeForAllDevices(): Promise<FcmWakeResult> {
     throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not set");
   }
 
-  const serviceAccount = JSON.parse(raw) as JWTInput & { project_id?: string };
+  const serviceAccount = parseFirebaseServiceAccountJson(raw);
   const projectId = serviceAccount.project_id;
   if (!projectId) {
     throw new Error("Invalid service account: missing project_id");
