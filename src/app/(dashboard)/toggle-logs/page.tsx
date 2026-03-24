@@ -8,13 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Loader2, Activity, RefreshCw, Clock, ShieldAlert, ShieldCheck } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 
-type StatusType = "ON" | "OFF" | "PERMISSION_DENIED" | "PERMISSION_RESTORED";
-
 interface ToggleLog {
   _id: string;
   deviceId: string;
   employeeName: string;
-  status: StatusType;
+  status: string;
   reason?: string;
   timestamp: string;
 }
@@ -23,7 +21,7 @@ interface ToggleLog {
 interface EmployeeStatus {
   employeeName: string;
   deviceId: string;
-  latestStatus: StatusType;
+  latestStatus: string;
   latestTimestamp: string;
   latestReason?: string;
   recentLogs: ToggleLog[];
@@ -31,16 +29,36 @@ interface EmployeeStatus {
 
 const PERMISSION_POLL_INTERVAL_SECONDS = 30;
 
-function getStatusBadge(status: StatusType) {
+function getStatusBadge(status: string) {
   switch (status) {
     case "ON":
       return <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/20">🟢 App ON</Badge>;
     case "OFF":
       return <Badge className="bg-rose-500/15 text-rose-400 border-rose-500/40 hover:bg-rose-500/20">🔴 App OFF</Badge>;
     case "PERMISSION_DENIED":
-      return <Badge className="bg-amber-500/15 text-amber-400 border-amber-500/40 hover:bg-amberald-500/20"><ShieldAlert className="w-3 h-3 mr-1 inline" />Permission Denied</Badge>;
+      return <Badge className="bg-amber-500/15 text-amber-400 border-amber-500/40 hover:bg-amber-500/20"><ShieldAlert className="w-3 h-3 mr-1 inline" />Permission Denied</Badge>;
     case "PERMISSION_RESTORED":
       return <Badge className="bg-sky-500/15 text-sky-400 border-sky-500/40 hover:bg-sky-500/20"><ShieldCheck className="w-3 h-3 mr-1 inline" />Permission Restored</Badge>;
+    case "ADMIN_DISABLED":
+      return (
+        <Badge className="bg-orange-600/15 text-orange-300 border-orange-500/45 hover:bg-orange-600/25">
+          <ShieldAlert className="w-3 h-3 mr-1 inline" />
+          Device admin OFF
+        </Badge>
+      );
+    case "ADMIN_ENABLED":
+      return (
+        <Badge className="bg-teal-500/15 text-teal-300 border-teal-500/40 hover:bg-teal-500/25">
+          <ShieldCheck className="w-3 h-3 mr-1 inline" />
+          Device admin ON
+        </Badge>
+      );
+    default:
+      return (
+        <Badge className="bg-slate-600/20 text-slate-300 border-slate-500/40">
+          {status || "Unknown"}
+        </Badge>
+      );
   }
 }
 
@@ -156,9 +174,17 @@ export default function ToggleLogsPage() {
                   </div>
                   {getStatusBadge(emp.latestStatus)}
                 </div>
-                {emp.latestReason && (
-                  <p className="text-xs text-slate-400 italic">{emp.latestReason}</p>
-                )}
+                {(() => {
+                  const detail =
+                    emp.latestReason ||
+                    (emp.latestStatus === "ADMIN_DISABLED"
+                      ? "User turned off device admin in Android Settings — work protection is off until they re-enable it."
+                      : emp.latestStatus === "ADMIN_ENABLED"
+                        ? "Device admin is active again on this device."
+                        : "");
+                  if (!detail) return null;
+                  return <p className="text-xs text-slate-400 italic">{detail}</p>;
+                })()}
                 <div className="text-xs text-slate-500 flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   Last checked: {formatDistanceToNow(new Date(emp.latestTimestamp), { addSuffix: true })}

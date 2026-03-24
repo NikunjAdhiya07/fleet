@@ -23,7 +23,15 @@ export async function POST(req: Request) {
     }
 
     const normalizedStatus = String(status).toUpperCase();
-    if (!["ON", "OFF", "PERMISSION_DENIED", "PERMISSION_RESTORED"].includes(normalizedStatus)) {
+    const allowed = [
+      "ON",
+      "OFF",
+      "PERMISSION_DENIED",
+      "PERMISSION_RESTORED",
+      "ADMIN_DISABLED",
+      "ADMIN_ENABLED",
+    ];
+    if (!allowed.includes(normalizedStatus)) {
       return NextResponse.json({ error: "Invalid status" }, { status: 400 });
     }
 
