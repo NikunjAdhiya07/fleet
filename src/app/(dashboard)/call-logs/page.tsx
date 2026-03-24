@@ -46,6 +46,25 @@ const GraphSkeleton = () => (
   </div>
 );
 
+function formatFcmWakeBanner(data: Record<string, unknown>): string {
+  const sent = Number(data.sent ?? 0);
+  const tokensFound = Number(data.tokensFound ?? 0);
+  const staleDevices = Number(data.staleDevices ?? 0);
+  const mode = data.mode as string | undefined;
+  const message = typeof data.message === "string" ? data.message : "";
+  const errors = Array.isArray(data.errors) ? data.errors : [];
+  const errPart =
+    errors.length > 0 ? ` — ${errors.length} send error(s) (see server logs)` : "";
+
+  if (message && sent === 0 && tokensFound === 0) {
+    return message + errPart;
+  }
+  if (mode === "all") {
+    return `Sent ${sent}/${tokensFound} push(es) to all registered device(s)${errPart}`;
+  }
+  return `Sent ${sent}/${tokensFound} push(es) to ${staleDevices} stale device(s)${errPart}`;
+}
+
 export default function CallLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
   const [tags, setTags] = useState<Record<string, Array<{name: string, savedBy: any[]}>>>({});
@@ -71,6 +90,7 @@ export default function CallLogsPage() {
   const [isDesktop, setIsDesktop] = useState(true);
   const [fcmWakeState, setFcmWakeState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [fcmWakeMsg, setFcmWakeMsg] = useState("");
+  const [fcmWakePingAll, setFcmWakePingAll] = useState(false);
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 640px)");
@@ -84,21 +104,23 @@ export default function CallLogsPage() {
     setFcmWakeState("loading");
     setFcmWakeMsg("");
     try {
-      const res = await fetch("/api/fcm-wake", { method: "POST" });
-      const data = await res.json().catch(() => ({}));
+      const params = new URLSearchParams();
+      if (fcmWakePingAll) params.set("all", "1");
+      else params.set("hours", "12");
+      const res = await fetch(`/api/fcm-wake?${params}`, { method: "POST" });
+      const data = await res.json().catch(() => ({} as Record<string, unknown>));
       if (res.ok) {
-        const { sent = 0, staleDevices = 0, tokensFound = 0 } = data;
-        setFcmWakeMsg(`Sent ${sent}/${tokensFound} push(es) to ${staleDevices} stale device(s)`);
+        setFcmWakeMsg(formatFcmWakeBanner(data));
         setFcmWakeState("success");
       } else {
-        setFcmWakeMsg(data.error ?? "Unknown error");
+        setFcmWakeMsg(String((data as { error?: string }).error ?? "Unknown error"));
         setFcmWakeState("error");
       }
-    } catch (e: any) {
-      setFcmWakeMsg(e.message ?? "Network error");
+    } catch (e: unknown) {
+      setFcmWakeMsg(e instanceof Error ? e.message : "Network error");
       setFcmWakeState("error");
     } finally {
-      setTimeout(() => setFcmWakeState("idle"), 5000);
+      setTimeout(() => setFcmWakeState("idle"), 8000);
     }
   };
 
@@ -669,7 +691,16 @@ export default function CallLogsPage() {
         </span>
 
         {/* FCM Wake-Up button */}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer shrink-0 select-none">
+            <input
+              type="checkbox"
+              checked={fcmWakePingAll}
+              onChange={(e) => setFcmWakePingAll(e.target.checked)}
+              className="rounded border-slate-600 bg-slate-900 accent-indigo-500"
+            />
+            Ping all devices (test)
+          </label>
           {fcmWakeMsg && (
             <span className={cn(
               "text-xs px-2 py-1 rounded-full border flex items-center gap-1.5",

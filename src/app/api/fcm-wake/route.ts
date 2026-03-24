@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { runFcmWakeForStaleDevices } from "@/lib/fcmWakeServer";
+import {
+  runFcmWakeForAllDevices,
+  runFcmWakeForStaleDevices,
+} from "@/lib/fcmWakeServer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -14,10 +17,14 @@ export async function POST(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const hours = parseInt(searchParams.get("hours") ?? "12", 10) || 12;
+  const wakeAll =
+    searchParams.get("all") === "1" || searchParams.get("all") === "true";
 
   if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim()) {
     try {
-      const data = await runFcmWakeForStaleDevices(hours);
+      const data = wakeAll
+        ? await runFcmWakeForAllDevices()
+        : await runFcmWakeForStaleDevices(hours);
       return NextResponse.json(data);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -43,7 +50,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const res = await fetch(`${backendUrl}/api/fcm-wake?hours=${hours}`, {
+    const q = new URLSearchParams({ hours: String(hours) });
+    if (wakeAll) q.set("all", "1");
+    const res = await fetch(`${backendUrl}/api/fcm-wake?${q}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

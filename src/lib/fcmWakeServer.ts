@@ -4,6 +4,9 @@ import mongoose from "mongoose";
 
 export type FcmWakeResult = {
   success: true;
+  mode?: "stale" | "all";
+  message?: string;
+  registeredTokens?: number;
   staleDevices: number;
   tokensFound: number;
   sent: number;
@@ -45,8 +48,12 @@ export async function runFcmWakeForStaleDevices(hours: number): Promise<FcmWakeR
     .toArray();
 
   if (staleDevices.length === 0) {
+    const registeredTokens = await db.collection("fcmtokens").countDocuments();
     return {
       success: true,
+      mode: "stale",
+      message: `No stale devices — every device has a call log within the last ${staleHours}h. ${registeredTokens} FCM token(s) on file. Use ?all=1 to ping all registered devices (testing).`,
+      registeredTokens,
       staleDevices: 0,
       tokensFound: 0,
       sent: 0,
@@ -63,6 +70,8 @@ export async function runFcmWakeForStaleDevices(hours: number): Promise<FcmWakeR
   if (tokens.length === 0) {
     return {
       success: true,
+      mode: "stale",
+      message: `${deviceIds.length} device(s) are stale but none have an FCM token. Open the Android app with monitoring on.`,
       staleDevices: deviceIds.length,
       tokensFound: 0,
       sent: 0,
@@ -125,7 +134,105 @@ export async function runFcmWakeForStaleDevices(hours: number): Promise<FcmWakeR
 
   return {
     success: true,
+    mode: "stale",
     staleDevices: deviceIds.length,
+    tokensFound: tokens.length,
+    sent,
+    errors,
+  };
+}
+
+/**
+ * Sends sync_now to every document in `fcmtokens` (for testing / manual nudge).
+ */
+export async function runFcmWakeForAllDevices(): Promise<FcmWakeResult> {
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
+  if (!raw) {
+    throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is not set");
+  }
+
+  const serviceAccount = JSON.parse(raw) as JWTInput & { project_id?: string };
+  const projectId = serviceAccount.project_id;
+  if (!projectId) {
+    throw new Error("Invalid service account: missing project_id");
+  }
+
+  await connectToDatabase();
+  const db = mongoose.connection.db;
+  if (!db) {
+    throw new Error("MongoDB not connected");
+  }
+
+  const tokens = await db.collection("fcmtokens").find({}).toArray();
+  if (tokens.length === 0) {
+    return {
+      success: true,
+      mode: "all",
+      message: "No FCM tokens registered in the database.",
+      staleDevices: 0,
+      tokensFound: 0,
+      sent: 0,
+      errors: [],
+    };
+  }
+
+  const auth = new GoogleAuth({
+    credentials: serviceAccount,
+    scopes: ["https://www.googleapis.com/auth/firebase.messaging"],
+  });
+  const client = await auth.getClient();
+  const accessTokenRes = await client.getAccessToken();
+  const accessToken = accessTokenRes.token;
+  if (!accessToken) {
+    throw new Error("Could not obtain OAuth access token for FCM");
+  }
+
+  let sent = 0;
+  const errors: FcmWakeResult["errors"] = [];
+
+  for (const tokenDoc of tokens) {
+    const deviceId = tokenDoc.deviceId as string;
+    const token = tokenDoc.token as string;
+    try {
+      const fcmRes = await fetch(
+        `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            message: {
+              token,
+              data: { action: "sync_now" },
+              android: {
+                priority: "high",
+                ttl: "0s",
+              },
+            },
+          }),
+        }
+      );
+
+      if (fcmRes.ok) {
+        sent++;
+      } else {
+        const errBody = await fcmRes.text();
+        errors.push({ deviceId, status: fcmRes.status, body: errBody });
+      }
+    } catch (sendErr: unknown) {
+      errors.push({
+        deviceId,
+        error: sendErr instanceof Error ? sendErr.message : String(sendErr),
+      });
+    }
+  }
+
+  return {
+    success: true,
+    mode: "all",
+    staleDevices: 0,
     tokensFound: tokens.length,
     sent,
     errors,
