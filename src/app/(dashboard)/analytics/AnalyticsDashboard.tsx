@@ -325,7 +325,7 @@ export default function AnalyticsDashboard({
                     )}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-auto p-0 border-slate-800 bg-slate-950" align="end">
+                <PopoverContent className="w-fit p-0 border-slate-800 bg-slate-950" align="end">
                   <Calendar
                     mode="range"
                     defaultMonth={customDateRange?.from ?? new Date()}

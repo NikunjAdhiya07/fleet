@@ -3,12 +3,11 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, Calendar as CalendarIcon, User, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle } from "lucide-react";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
-import { useEffect, useState, useMemo, useRef } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DateRange } from "react-day-picker";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Info } from "lucide-react";
@@ -23,6 +22,7 @@ import {
   LabelList,
 } from "recharts";
 import ComparisonPanel from "./ComparisonPanel";
+import { CustomRangePopover } from "./CustomRangePopover";
 
 const GraphSkeleton = () => (
   <div className="w-full h-full flex flex-col items-center justify-end pt-8 pb-4 px-2 sm:px-6">
@@ -87,10 +87,11 @@ export default function CallLogsPage() {
   const [compareViewMode, setCompareViewMode] = useState<"panels" | "singleGraph">("singleGraph");
   const [selectedCompareEmployees, setSelectedCompareEmployees] = useState<string[]>([]);
   const [compareXAxisMode, setCompareXAxisMode] = useState<"hour" | "date">("hour");
+  const [ignoredGraphEmployees, setIgnoredGraphEmployees] = useState<string[]>([]);
   const [isDesktop, setIsDesktop] = useState(true);
   const [fcmWakeState, setFcmWakeState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [fcmWakeMsg, setFcmWakeMsg] = useState("");
-  const [fcmWakePingAll, setFcmWakePingAll] = useState(false);
+  const [fcmWakePingAll, setFcmWakePingAll] = useState(true);
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 640px)");
@@ -172,6 +173,18 @@ export default function CallLogsPage() {
       }, 80);
     }
   };
+
+  const applyCustomRange = useCallback((range: DateRange | undefined) => {
+    if (range?.from) {
+      setDateRange(range);
+      setDateFilter("CUSTOM");
+    }
+  }, []);
+
+  const resetDateFilterToToday = useCallback(() => {
+    setDateRange(undefined);
+    setDateFilter("TODAY");
+  }, []);
 
   useEffect(() => {
     fetchLogs();
@@ -275,6 +288,12 @@ export default function CallLogsPage() {
     }
   }, [employeeNames]);
 
+  const ignoredEmployeeSet = useMemo(() => new Set(ignoredGraphEmployees), [ignoredGraphEmployees]);
+
+  useEffect(() => {
+    setIgnoredGraphEmployees((prev) => prev.filter((n) => employeeNames.includes(n)));
+  }, [employeeNames]);
+
   const getEmployeeName = (log: any) =>
     log.employeeName || log.driverId?.userId?.name || "Unknown";
 
@@ -331,6 +350,11 @@ export default function CallLogsPage() {
 
     return uniqueLogs;
   }, [rawFilteredLogs]);
+
+  const graphDisplayLogs = useMemo(
+    () => filteredLogs.filter((log) => !ignoredEmployeeSet.has(getEmployeeName(log))),
+    [filteredLogs, ignoredEmployeeSet]
+  );
 
   useEffect(() => {
     if (filteredLogs.length > 0) {
@@ -446,7 +470,7 @@ export default function CallLogsPage() {
       total: 0,
     }));
 
-    filteredLogs.forEach((log) => {
+    graphDisplayLogs.forEach((log) => {
       if (!log.timestamp) return;
       const date = new Date(log.timestamp);
       if (isNaN(date.getTime())) return;
@@ -462,7 +486,29 @@ export default function CallLogsPage() {
     // Only keep buckets that actually have calls so the x-axis
     // shows only hours with activity (no empty columns).
     return base.filter((b) => b.total > 0);
-  }, [filteredLogs, timeBuckets]);
+  }, [graphDisplayLogs, timeBuckets]);
+
+  const callTypeStats = useMemo(() => {
+    let incoming = 0;
+    let outgoing = 0;
+    let missed = 0;
+    for (const log of graphDisplayLogs) {
+      if (log.callType === "INCOMING") incoming += 1;
+      else if (log.callType === "OUTGOING") outgoing += 1;
+      else if (log.callType === "MISSED") missed += 1;
+    }
+    return {
+      total: filteredLogs.length,
+      incoming,
+      outgoing,
+      missed,
+    };
+  }, [graphDisplayLogs]);
+
+  const compareGraphEmployees = useMemo(
+    () => selectedCompareEmployees.filter((e) => !ignoredEmployeeSet.has(e)),
+    [selectedCompareEmployees, ignoredEmployeeSet]
+  );
 
   // Date range for "by day" chart: derived from selected date range (each day in range = Day 1, Day 2, ...)
   const chartDateRange = useMemo(() => {
@@ -500,8 +546,8 @@ export default function CallLogsPage() {
 
   // Logs filtered for single-graph compare (selected employees + date range + call type filter)
   const singleGraphLogs = useMemo(() => {
-    if (selectedCompareEmployees.length === 0) return [];
-    const empSet = new Set(selectedCompareEmployees);
+    if (compareGraphEmployees.length === 0) return [];
+    const empSet = new Set(compareGraphEmployees);
     let list = logs.filter((log) => empSet.has(getEmployeeName(log)));
     if (typeFilter !== "ALL") {
       list = list.filter((log) => log.callType === typeFilter);
@@ -528,11 +574,11 @@ export default function CallLogsPage() {
       if (!isDup) unique.push(log);
     });
     return unique;
-  }, [logs, selectedCompareEmployees, chartDateRange, typeFilter]);
+  }, [logs, compareGraphEmployees, chartDateRange, typeFilter]);
 
   // Single-graph: grouped bars (one bar per employee per slot), each bar stacked by incoming/outgoing/missed. By hour.
   const singleGraphChartDataByHour = useMemo(() => {
-    const empKeys = selectedCompareEmployees;
+    const empKeys = compareGraphEmployees;
     if (empKeys.length === 0) return [];
     const base = timeBuckets.map((b) => {
       const row: Record<string, string | number> = { timeRange: b.label, hour: b.hour };
@@ -557,11 +603,11 @@ export default function CallLogsPage() {
     return base.filter((b) =>
       empKeys.some((e) => ((b[`${e}_incoming`] as number) || 0) + ((b[`${e}_outgoing`] as number) || 0) + ((b[`${e}_missed`] as number) || 0) > 0)
     );
-  }, [singleGraphLogs, timeBuckets, selectedCompareEmployees]);
+  }, [singleGraphLogs, timeBuckets, compareGraphEmployees]);
 
   // Single-graph: by date (one group per day in range, e.g. "10 Mar", "11 Mar", ...)
   const singleGraphChartDataByDate = useMemo(() => {
-    const empKeys = selectedCompareEmployees;
+    const empKeys = compareGraphEmployees;
     const { days } = chartDateRange;
     if (empKeys.length === 0 || days.length === 0) return [];
     const base = days.map((d) => {
@@ -585,7 +631,7 @@ export default function CallLogsPage() {
       if (typeof row[key] === "number") (row[key] as number) += 1;
     });
     return base;
-  }, [singleGraphLogs, chartDateRange, selectedCompareEmployees]);
+  }, [singleGraphLogs, chartDateRange, compareGraphEmployees]);
 
   const singleGraphChartData = compareXAxisMode === "date" ? singleGraphChartDataByDate : singleGraphChartDataByHour;
 
@@ -675,6 +721,51 @@ export default function CallLogsPage() {
       </div>
     );
   };
+
+  const graphExclusionSection =
+    employeeNames.length > 0 ? (
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <UserX className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+            <p className="text-xs font-medium text-slate-300">Exclude from graph</p>
+          </div>
+          {ignoredGraphEmployees.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIgnoredGraphEmployees([])}
+              className="text-[11px] font-medium text-indigo-400 hover:text-indigo-300 shrink-0"
+            >
+              Clear exclusions
+            </button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {employeeNames.map((name) => {
+            const ignored = ignoredEmployeeSet.has(name);
+            return (
+              <button
+                key={name}
+                type="button"
+                onClick={() =>
+                  setIgnoredGraphEmployees((prev) =>
+                    ignored ? prev.filter((n) => n !== name) : [...prev, name].sort()
+                  )
+                }
+                className={cn(
+                  "px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors",
+                  ignored
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-200/90 line-through decoration-amber-200/50"
+                    : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+                )}
+              >
+                {name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    ) : null;
 
   return (
     <div className="space-y-5 relative">
@@ -835,46 +926,12 @@ export default function CallLogsPage() {
                 </button>
               ))}
 
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button
-                    onClick={() => setDateFilter("CUSTOM")}
-                    className={cn(
-                      "flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors min-w-[110px]",
-                      dateFilter === "CUSTOM"
-                        ? "bg-emerald-600 text-white"
-                        : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
-                    )}
-                  >
-                    <CalendarIcon className="w-3 h-3" />
-                    {dateFilter === "CUSTOM" && dateRange?.from ? (
-                      dateRange.to ? (
-                        <>
-                          {format(dateRange.from, "MMM d")} – {format(dateRange.to, "MMM d")}
-                        </>
-                      ) : (
-                        format(dateRange.from, "MMM d, y")
-                      )
-                    ) : (
-                      "Custom Date"
-                    )}
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0 border-slate-800 bg-slate-950" align="end">
-                  <Calendar
-                    initialFocus
-                    mode="range"
-                    defaultMonth={dateRange?.from}
-                    selected={dateRange}
-                    onSelect={(range) => {
-                      setDateRange(range);
-                      if (range?.from) setDateFilter("CUSTOM");
-                    }}
-                    numberOfMonths={1}
-                    className="text-white bg-slate-950 border-slate-800"
-                  />
-                </PopoverContent>
-              </Popover>
+              <CustomRangePopover
+                dateFilter={dateFilter}
+                committedRange={dateRange}
+                onApply={applyCustomRange}
+                onResetToToday={resetDateFilterToToday}
+              />
             </div>
           </div>
         </div>
@@ -888,8 +945,11 @@ export default function CallLogsPage() {
             <div className="space-y-0.5">
               <p className="text-sm font-medium text-slate-200">Call Activity by Hour</p>
               <p className="text-xs text-slate-500">
-                {selectedEmployee === "ALL" ? "All employees" : selectedEmployee} ·{" "}
-                {chartData.length > 0 ? "Stacked by call type" : "No calls in selected range"}
+                {selectedEmployee === "ALL" ? "All employees" : selectedEmployee}
+                {ignoredGraphEmployees.length > 0 && (
+                  <span className="text-amber-400/90"> · {ignoredGraphEmployees.length} excluded from chart</span>
+                )}{" "}
+                · {chartData.length > 0 ? "Stacked by call type" : "No calls in selected range"}
               </p>
             </div>
             <button
@@ -905,9 +965,53 @@ export default function CallLogsPage() {
               {comparisonMode ? "Exit Compare" : "Compare"}
             </button>
           </div>
-          <div className="h-72 sm:h-96 min-h-[320px]">
+          {graphExclusionSection && <div className="mb-4">{graphExclusionSection}</div>}
+          <div
+            className={cn(
+              "mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] leading-none",
+              isLoading && filteredLogs.length > 0 && "opacity-60"
+            )}
+          >
+            <span className="whitespace-nowrap">
+              <span className="text-indigo-400/90">Total calls</span>{" "}
+              <span className="tabular-nums font-medium text-indigo-200">
+                {isLoading && filteredLogs.length === 0 ? "—" : callTypeStats.total}
+              </span>
+            </span>
+            <span className="whitespace-nowrap">
+              <span className="text-emerald-500/90">Incoming</span>{" "}
+              <span className="tabular-nums font-medium text-emerald-400">
+                {isLoading && filteredLogs.length === 0 ? "—" : callTypeStats.incoming}
+              </span>
+            </span>
+            <span className="whitespace-nowrap">
+              <span className="text-blue-400/90">Outgoing</span>{" "}
+              <span className="tabular-nums font-medium text-blue-300">
+                {isLoading && filteredLogs.length === 0 ? "—" : callTypeStats.outgoing}
+              </span>
+            </span>
+            <span className="whitespace-nowrap">
+              <span className="text-red-400/90">Missed</span>{" "}
+              <span className="tabular-nums font-medium text-red-300">
+                {isLoading && filteredLogs.length === 0 ? "—" : callTypeStats.missed}
+              </span>
+            </span>
+          </div>
+          <div className="relative h-72 sm:h-96 min-h-[320px]">
+            {isLoading && filteredLogs.length > 0 && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-slate-950/45 backdrop-blur-[1px]">
+                <div className="flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 shadow-lg">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />
+                  <span className="text-[11px] font-medium text-slate-300">Loading chart…</span>
+                </div>
+              </div>
+            )}
             {isLoading && filteredLogs.length === 0 ? (
               <GraphSkeleton />
+            ) : graphDisplayLogs.length === 0 && filteredLogs.length > 0 ? (
+              <div className="flex h-full items-center justify-center text-xs text-slate-500 px-4 text-center">
+                Everyone is excluded from the chart. Clear exclusions above or pick different employees.
+              </div>
             ) : chartData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart
@@ -1088,10 +1192,18 @@ export default function CallLogsPage() {
                     {selectedCompareEmployees.length > 0 && (
                       <span className="text-xs text-slate-500 shrink-0">
                         {selectedCompareEmployees.length} selected
+                        {compareGraphEmployees.length < selectedCompareEmployees.length && (
+                          <span className="text-amber-400/90">
+                            {" "}
+                            · {selectedCompareEmployees.length - compareGraphEmployees.length} excluded from chart
+                          </span>
+                        )}
                       </span>
                     )}
                   </div>
                 </div>
+
+                {graphExclusionSection && <div>{graphExclusionSection}</div>}
 
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs font-medium text-slate-400">X-axis</span>
@@ -1119,7 +1231,7 @@ export default function CallLogsPage() {
                   </div>
                   {compareXAxisMode === "date" && (
                     <span className="text-[11px] text-slate-500">
-                      Use Custom Date above to pick range (e.g. 10 Mar – 15 Mar)
+                      Use Custom range above (e.g. 10 Mar – 15 Mar).
                     </span>
                   )}
                 </div>
@@ -1128,6 +1240,10 @@ export default function CallLogsPage() {
                   {selectedCompareEmployees.length === 0 ? (
                     <div className="flex h-full items-center justify-center text-sm text-slate-500">
                       Select one or more employees to compare in the same graph.
+                    </div>
+                  ) : compareGraphEmployees.length === 0 ? (
+                    <div className="flex h-full items-center justify-center text-sm text-slate-500 px-4 text-center">
+                      All selected employees are excluded from the chart. Adjust exclusions above.
                     </div>
                   ) : singleGraphChartData.length === 0 ? (
                     <div className="flex h-full items-center justify-center text-sm text-slate-500">
@@ -1162,7 +1278,7 @@ export default function CallLogsPage() {
                           width={28}
                         />
                         <RechartsTooltip content={<CompareTooltip />} />
-                        {selectedCompareEmployees.flatMap((emp) => {
+                        {compareGraphEmployees.flatMap((emp) => {
                           const initials = getInitials(emp);
                           return [
                             <Bar
@@ -1263,12 +1379,12 @@ export default function CallLogsPage() {
                     </div>
                   )}
                 </div>
-                {selectedCompareEmployees.length > 0 && (
+                {compareGraphEmployees.length > 0 && (
                   <div className="pt-3 border-t border-slate-800 space-y-3">
                     <div>
                       <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Employees (initials on bars)</div>
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                        {selectedCompareEmployees.map((emp) => (
+                        {compareGraphEmployees.map((emp) => (
                           <div key={emp} className="flex items-center gap-1.5">
                             <span className="text-xs font-semibold text-slate-400">{getInitials(emp)}</span>
                             <span className="text-xs text-slate-300">= {emp}</span>
@@ -1445,20 +1561,39 @@ export default function CallLogsPage() {
                 const intelKey = `${log.phoneNumber}|${employee}`;
                 const intelTag = intelligenceTags[intelKey];
 
+                const mobileCallTypeLabel =
+                  log.callType === "INCOMING"
+                    ? "Incoming"
+                    : log.callType === "OUTGOING"
+                      ? "Outgoing"
+                      : log.callType === "MISSED"
+                        ? "Missed"
+                        : log.callType === "UNKNOWN"
+                          ? "Unknown"
+                          : "";
+
                 return (
                   <div key={log._id} className="p-2.5 hover:bg-slate-800/40 transition-colors w-full flex flex-col gap-1 min-h-0">
-                    {/* Row 1: Contact · Employee (single line) + Badge + Duration */}
-                    <div className="flex items-center justify-between gap-2 min-w-0">
-                      <span className="text-sm font-semibold text-white truncate flex-1 min-w-0">
-                        {displayContactName}
-                        <span className="text-slate-500 font-normal"> · {employee}</span>
+                    {/* Row 1: Tracked user (full width priority) + call type badge */}
+                    <div className="flex items-start justify-between gap-2 min-w-0">
+                      <span className="text-sm font-semibold text-white min-w-0 flex-1 pr-1 leading-snug line-clamp-2 break-words">
+                        {employee}
                       </span>
-                      <span className="flex items-center gap-1.5 shrink-0">
-                        <CallTypeBadge callType={log.callType} className="border-0 text-[10px] px-1.5 py-0.5 font-medium" />
-                        <span className="text-[11px] text-slate-400 font-medium tabular-nums">{formatDuration(log.duration)}</span>
-                      </span>
+                      <CallTypeBadge callType={log.callType} className="border-0 text-[10px] px-1.5 py-0.5 font-medium shrink-0 self-center" />
                     </div>
-                    {/* Row 2: Phone + Date (single line) */}
+                    {/* Row 2: Contact truncates; call type + duration stay visible */}
+                    <div className="flex items-center gap-1 min-w-0 text-xs text-slate-400">
+                      <span className="font-medium text-slate-300 truncate min-w-0">{displayContactName}</span>
+                      {mobileCallTypeLabel && (
+                        <>
+                          <span className="shrink-0">·</span>
+                          <span className="shrink-0">{mobileCallTypeLabel}</span>
+                        </>
+                      )}
+                      <span className="shrink-0">·</span>
+                      <span className="shrink-0 tabular-nums font-medium">{formatDuration(log.duration)}</span>
+                    </div>
+                    {/* Row 3: Phone + Date */}
                     <div className="flex items-center justify-between gap-2 min-w-0">
                       <span className="text-xs font-medium text-slate-300 font-mono truncate min-w-0">{log.phoneNumber}</span>
                       <span className="text-sm text-slate-400 shrink-0 font-medium">

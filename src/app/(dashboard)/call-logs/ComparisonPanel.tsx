@@ -338,7 +338,7 @@ export default function ComparisonPanel({
               </button>
             </PopoverTrigger>
             <PopoverContent
-              className="w-auto p-0 border-slate-800 bg-slate-950"
+              className="w-fit p-0 border-slate-800 bg-slate-950"
               align="start"
             >
               <Calendar
