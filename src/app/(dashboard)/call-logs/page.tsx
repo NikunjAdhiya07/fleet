@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle } from "lucide-react";
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle, ChevronDown } from "lucide-react";
 import { format, subDays, startOfDay, endOfDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,7 @@ import {
 } from "recharts";
 import ComparisonPanel from "./ComparisonPanel";
 import { CustomRangePopover } from "./CustomRangePopover";
+import { DivideByEmployeeChartJs } from "./DivideByEmployeeChartJs";
 
 const GraphSkeleton = () => (
   <div className="w-full h-full flex flex-col items-center justify-end pt-8 pb-4 px-2 sm:px-6">
@@ -81,6 +82,7 @@ export default function CallLogsPage() {
   const [isFetchingTags, setIsFetchingTags] = useState(false);
   const logsRef = useRef<HTMLDivElement>(null);
   const [comparisonMode, setComparisonMode] = useState(false);
+  const [divideByEmployee, setDivideByEmployee] = useState(false);
   const [comparisonPanels, setComparisonPanels] = useState<
     Array<{ id: string; dateFilter: "TODAY" | "YESTERDAY" | "CUSTOM" }>
   >([]);
@@ -88,6 +90,7 @@ export default function CallLogsPage() {
   const [selectedCompareEmployees, setSelectedCompareEmployees] = useState<string[]>([]);
   const [compareXAxisMode, setCompareXAxisMode] = useState<"hour" | "date">("hour");
   const [ignoredGraphEmployees, setIgnoredGraphEmployees] = useState<string[]>([]);
+  const [graphExclusionEmployeesOpen, setGraphExclusionEmployeesOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(true);
   const [fcmWakeState, setFcmWakeState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [fcmWakeMsg, setFcmWakeMsg] = useState("");
@@ -488,6 +491,53 @@ export default function CallLogsPage() {
     return base.filter((b) => b.total > 0);
   }, [graphDisplayLogs, timeBuckets]);
 
+  const divideGraphEmployees = useMemo(() => {
+    if (selectedEmployee !== "ALL") {
+      return ignoredEmployeeSet.has(selectedEmployee) ? [] : [selectedEmployee];
+    }
+    return employeeNames.filter((e) => !ignoredEmployeeSet.has(e));
+  }, [employeeNames, ignoredEmployeeSet, selectedEmployee]);
+
+  const chartDataDividedByEmployee = useMemo(() => {
+    const empKeys = divideGraphEmployees;
+    if (empKeys.length === 0) return [];
+    const base = timeBuckets.map((b) => {
+      const row: Record<string, string | number> = { timeRange: b.label, hour: b.hour };
+      empKeys.forEach((e) => {
+        row[`${e}_incoming`] = 0;
+        row[`${e}_outgoing`] = 0;
+        row[`${e}_missed`] = 0;
+      });
+      return row;
+    });
+    graphDisplayLogs.forEach((log) => {
+      if (!log.timestamp) return;
+      const date = new Date(log.timestamp);
+      if (isNaN(date.getTime())) return;
+      const hour = date.getHours();
+      const bucket = base[hour];
+      if (!bucket) return;
+      const emp = getEmployeeName(log);
+      if (!empKeys.includes(emp)) return;
+      const key =
+        log.callType === "INCOMING"
+          ? `${emp}_incoming`
+          : log.callType === "OUTGOING"
+            ? `${emp}_outgoing`
+            : `${emp}_missed`;
+      if (typeof bucket[key] === "number") (bucket[key] as number) += 1;
+    });
+    return base.filter((b) =>
+      empKeys.some(
+        (e) =>
+          ((b[`${e}_incoming`] as number) || 0) +
+            ((b[`${e}_outgoing`] as number) || 0) +
+            ((b[`${e}_missed`] as number) || 0) >
+          0
+      )
+    );
+  }, [graphDisplayLogs, timeBuckets, divideGraphEmployees]);
+
   const callTypeStats = useMemo(() => {
     let incoming = 0;
     let outgoing = 0;
@@ -635,7 +685,7 @@ export default function CallLogsPage() {
 
   const singleGraphChartData = compareXAxisMode === "date" ? singleGraphChartDataByDate : singleGraphChartDataByHour;
 
-  // Compare chart: same call-type colors as rest of app (green/blue/red). Employees identified by initials on bars.
+  // Compare chart: same call-type colors as rest of app (green/blue/red).
   const COMPARE_CALL_TYPE_COLORS = { incoming: "#22c55e", outgoing: "#3b82f6", missed: "#ef4444" };
 
   const getInitials = (name: string) =>
@@ -645,6 +695,73 @@ export default function CallLogsPage() {
       .join("")
       .toUpperCase()
       .slice(0, 2);
+
+  const truncateNameForBarWidth = (name: string, barWidth: number) => {
+    const w = Math.max(20, barWidth);
+    const maxChars = Math.max(4, Math.floor(w / 5.8));
+    if (name.length <= maxChars) return name;
+    return `${name.slice(0, Math.max(1, maxChars - 1))}…`;
+  };
+
+  /**
+   * Recharts `LabelList` + custom `content` is unreliable for stacked segments when some values are 0.
+   * Use `Bar`’s `label` on the **missed** (top) series only: it still runs per cell and receives geometry for
+   * anchoring above the stack; totals are read from `payload` so initials/name show even when missed === 0.
+   */
+  const makeEmployeeStackTopBarLabel = (emp: string) => (props: any) => {
+    const pl = props.payload;
+    if (!pl) return null;
+    const inc = Number(pl[`${emp}_incoming`]) || 0;
+    const out = Number(pl[`${emp}_outgoing`]) || 0;
+    const mis = Number(pl[`${emp}_missed`]) || 0;
+    const total = inc + out + mis;
+    if (total === 0) return null;
+
+    const w = Number(props.width) || 0;
+    if (w <= 0) return null;
+
+    const cx = (Number(props.x) || 0) + w / 2;
+    const yTop = Number(props.y) || 0;
+    const nameLine = truncateNameForBarWidth(emp, w);
+    const initials = getInitials(emp);
+
+    return (
+      <g>
+        <text
+          x={cx}
+          y={yTop - 20}
+          textAnchor="middle"
+          dominantBaseline="alphabetic"
+          fill="#cbd5e1"
+          fontSize={8}
+          fontWeight={600}
+          paintOrder="stroke"
+          stroke="rgba(15, 23, 42, 0.9)"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          style={{ pointerEvents: "none" }}
+        >
+          {nameLine}
+        </text>
+        <text
+          x={cx}
+          y={yTop - 6}
+          textAnchor="middle"
+          dominantBaseline="alphabetic"
+          fill="#ffffff"
+          fontSize={11}
+          fontWeight={700}
+          paintOrder="stroke"
+          stroke="rgba(10, 20, 40, 0.95)"
+          strokeWidth={3}
+          strokeLinejoin="round"
+          style={{ pointerEvents: "none" }}
+        >
+          {initials}
+        </text>
+      </g>
+    );
+  };
 
   const AnalyticsTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload || payload.length === 0) return null;
@@ -726,10 +843,22 @@ export default function CallLogsPage() {
     employeeNames.length > 0 ? (
       <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+          <button
+            type="button"
+            onClick={() => setGraphExclusionEmployeesOpen((v) => !v)}
+            aria-expanded={graphExclusionEmployeesOpen}
+            className="flex items-center gap-2 min-w-0 rounded-md text-left hover:bg-slate-800/60 -ml-1 pl-1 pr-2 py-1 transition-colors"
+          >
             <UserX className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-            <p className="text-xs font-medium text-slate-300">Exclude from graph</p>
-          </div>
+            <span className="text-xs font-medium text-slate-300">Exclude from graph</span>
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 text-slate-500 shrink-0 transition-transform duration-200",
+                graphExclusionEmployeesOpen && "rotate-180"
+              )}
+              aria-hidden
+            />
+          </button>
           {ignoredGraphEmployees.length > 0 && (
             <button
               type="button"
@@ -740,30 +869,32 @@ export default function CallLogsPage() {
             </button>
           )}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {employeeNames.map((name) => {
-            const ignored = ignoredEmployeeSet.has(name);
-            return (
-              <button
-                key={name}
-                type="button"
-                onClick={() =>
-                  setIgnoredGraphEmployees((prev) =>
-                    ignored ? prev.filter((n) => n !== name) : [...prev, name].sort()
-                  )
-                }
-                className={cn(
-                  "px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors",
-                  ignored
-                    ? "border-amber-500/40 bg-amber-500/10 text-amber-200/90 line-through decoration-amber-200/50"
-                    : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
-                )}
-              >
-                {name}
-              </button>
-            );
-          })}
-        </div>
+        {graphExclusionEmployeesOpen && (
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            {employeeNames.map((name) => {
+              const ignored = ignoredEmployeeSet.has(name);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() =>
+                    setIgnoredGraphEmployees((prev) =>
+                      ignored ? prev.filter((n) => n !== name) : [...prev, name].sort()
+                    )
+                  }
+                  className={cn(
+                    "px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors",
+                    ignored
+                      ? "border-amber-500/40 bg-amber-500/10 text-amber-200/90 line-through decoration-amber-200/50"
+                      : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+                  )}
+                >
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     ) : null;
 
@@ -949,21 +1080,44 @@ export default function CallLogsPage() {
                 {ignoredGraphEmployees.length > 0 && (
                   <span className="text-amber-400/90"> · {ignoredGraphEmployees.length} excluded from chart</span>
                 )}{" "}
-                · {chartData.length > 0 ? "Stacked by call type" : "No calls in selected range"}
+                ·{" "}
+                {divideByEmployee
+                  ? chartDataDividedByEmployee.length > 0
+                    ? "Grouped by employee · stacked by call type"
+                    : "No calls in selected range"
+                  : chartData.length > 0
+                    ? "Stacked by call type"
+                    : "No calls in selected range"}
               </p>
             </div>
-            <button
-              onClick={toggleComparisonMode}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200",
-                comparisonMode
-                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/25"
-                  : "bg-slate-800 text-slate-300 hover:bg-indigo-600 hover:text-white"
+            <div className="flex items-center gap-2">
+              {selectedEmployee === "ALL" && employeeNames.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setDivideByEmployee((v) => !v)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200",
+                    divideByEmployee
+                      ? "bg-emerald-600 text-white shadow-lg shadow-emerald-500/20"
+                      : "bg-slate-800 text-slate-300 hover:bg-emerald-600 hover:text-white"
+                  )}
+                >
+                  {divideByEmployee ? "Total view" : "Divide by employee"}
+                </button>
               )}
-            >
-              <ArrowLeftRight className="w-3.5 h-3.5" />
-              {comparisonMode ? "Exit Compare" : "Compare"}
-            </button>
+              <button
+                onClick={toggleComparisonMode}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200",
+                  comparisonMode
+                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/25"
+                    : "bg-slate-800 text-slate-300 hover:bg-indigo-600 hover:text-white"
+                )}
+              >
+                <ArrowLeftRight className="w-3.5 h-3.5" />
+                {comparisonMode ? "Exit Compare" : "Compare"}
+              </button>
+            </div>
           </div>
           {graphExclusionSection && <div className="mb-4">{graphExclusionSection}</div>}
           <div
@@ -1012,76 +1166,99 @@ export default function CallLogsPage() {
               <div className="flex h-full items-center justify-center text-xs text-slate-500 px-4 text-center">
                 Everyone is excluded from the chart. Clear exclusions above or pick different employees.
               </div>
-            ) : chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart
-                  data={chartData}
-                  margin={{ top: 28, right: 0, left: -20, bottom: 88 }}
-                  barCategoryGap="6%"
+            ) : (divideByEmployee ? chartDataDividedByEmployee.length > 0 : chartData.length > 0) ? (
+              <div className={cn("w-full h-full", divideByEmployee && "overflow-x-auto")} style={{ WebkitOverflowScrolling: "touch" }}>
+                <div
+                  className="h-full w-full"
+                  style={{
+                    minWidth: divideByEmployee
+                      ? Math.max((chartDataDividedByEmployee.length || 0) * (isDesktop ? 150 : 92), isDesktop ? 720 : 360)
+                      : undefined,
+                  }}
                 >
-                  <XAxis
-                    dataKey="timeRange"
-                    tickLine={false}
-                    axisLine={{ stroke: "#1f2937" }}
-                    tick={{ fill: "#9ca3af", fontSize: 10, textAnchor: "end" }}
-                    interval={0}
-                    angle={-45}
-                  />
-                  <YAxis
-                    allowDecimals={false}
-                    tickLine={false}
-                    axisLine={{ stroke: "#1f2937" }}
-                    tick={{ fill: "#9ca3af", fontSize: 10 }}
-                    tickCount={10}
-                  />
-                  <RechartsTooltip content={<AnalyticsTooltip />} />
-                  <Bar dataKey="incoming" stackId="calls" fill="#22c55e">
-                    <LabelList
-                      dataKey="incoming"
-                      position="center"
-                      fill="#fff"
-                      fontSize={10}
-                      fontWeight={600}
-                      formatter={(value: any) => (value > 0 ? String(value) : "")}
+                  {divideByEmployee ? (
+                    <DivideByEmployeeChartJs
+                      rows={chartDataDividedByEmployee}
+                      employees={divideGraphEmployees}
+                      minWidthPx={Math.max(
+                        (chartDataDividedByEmployee.length || 0) * (isDesktop ? 150 : 92),
+                        isDesktop ? 720 : 360
+                      )}
                     />
-                  </Bar>
-                  <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6">
-                    <LabelList
-                      dataKey="outgoing"
-                      position="center"
-                      fill="#fff"
-                      fontSize={10}
-                      fontWeight={600}
-                      formatter={(value: any) => (value > 0 ? String(value) : "")}
-                    />
-                  </Bar>
-                  <Bar dataKey="missed" stackId="calls" fill="#ef4444" radius={[4, 4, 0, 0]}>
-                    <LabelList
-                      dataKey="missed"
-                      position="center"
-                      fill="#fff"
-                      fontSize={10}
-                      fontWeight={600}
-                      formatter={(value: any) => (value > 0 ? String(value) : "")}
-                    />
-                  </Bar>
-                  <Line 
-                    type="monotone" 
-                    dataKey="total" 
-                    stroke="transparent" 
-                    activeDot={false} 
-                    dot={(props: any) => {
-                      const { cx, cy, payload } = props;
-                      if (!payload || payload.total === 0) return null;
-                      return (
-                        <text x={cx} y={cy - 8} fill="#e2e8f0" fontSize={11} fontWeight={600} textAnchor="middle">
-                          {payload.total}
-                        </text>
-                      );
-                    }} 
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart
+                        data={chartData}
+                        margin={{ top: 28, right: 0, left: -20, bottom: 88 }}
+                        barCategoryGap="6%"
+                        barGap={0}
+                      >
+                        <XAxis
+                          dataKey="timeRange"
+                          tickLine={false}
+                          axisLine={{ stroke: "#1f2937" }}
+                          tick={{ fill: "#9ca3af", fontSize: 10, textAnchor: "end" }}
+                          interval={0}
+                          angle={-45}
+                        />
+                        <YAxis
+                          allowDecimals={false}
+                          tickLine={false}
+                          axisLine={{ stroke: "#1f2937" }}
+                          tick={{ fill: "#9ca3af", fontSize: 10 }}
+                          tickCount={10}
+                        />
+                        <RechartsTooltip content={<AnalyticsTooltip />} />
+                        <Bar dataKey="incoming" stackId="calls" fill="#22c55e">
+                          <LabelList
+                            dataKey="incoming"
+                            position="center"
+                            fill="#fff"
+                            fontSize={10}
+                            fontWeight={600}
+                            formatter={(value: any) => (value > 0 ? String(value) : "")}
+                          />
+                        </Bar>
+                        <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6">
+                          <LabelList
+                            dataKey="outgoing"
+                            position="center"
+                            fill="#fff"
+                            fontSize={10}
+                            fontWeight={600}
+                            formatter={(value: any) => (value > 0 ? String(value) : "")}
+                          />
+                        </Bar>
+                        <Bar dataKey="missed" stackId="calls" fill="#ef4444" radius={[4, 4, 0, 0]}>
+                          <LabelList
+                            dataKey="missed"
+                            position="center"
+                            fill="#fff"
+                            fontSize={10}
+                            fontWeight={600}
+                            formatter={(value: any) => (value > 0 ? String(value) : "")}
+                          />
+                        </Bar>
+                        <Line
+                          type="monotone"
+                          dataKey="total"
+                          stroke="transparent"
+                          activeDot={false}
+                          dot={(props: any) => {
+                            const { cx, cy, payload } = props;
+                            if (!payload || payload.total === 0) return null;
+                            return (
+                              <text x={cx} y={cy - 8} fill="#e2e8f0" fontSize={11} fontWeight={600} textAnchor="middle">
+                                {payload.total}
+                              </text>
+                            );
+                          }}
+                        />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </div>
             ) : (
               <div className="flex h-full items-center justify-center text-xs text-slate-500">
                 No call activity for the selected filters.
@@ -1257,7 +1434,7 @@ export default function CallLogsPage() {
                           <ResponsiveContainer width="100%" height="100%" minHeight={300}>
                       <ComposedChart
                         data={singleGraphChartData}
-                        margin={{ top: 32, right: 16, left: 8, bottom: 88 }}
+                        margin={{ top: 58, right: 16, left: 8, bottom: 88 }}
                         barCategoryGap="8%"
                         barGap={0}
                       >
@@ -1279,7 +1456,6 @@ export default function CallLogsPage() {
                         />
                         <RechartsTooltip content={<CompareTooltip />} />
                         {compareGraphEmployees.flatMap((emp) => {
-                          const initials = getInitials(emp);
                           return [
                             <Bar
                               key={`${emp}_incoming`}
@@ -1296,25 +1472,6 @@ export default function CallLogsPage() {
                                 fontSize={9}
                                 fontWeight={600}
                                 formatter={(value: any) => (value > 0 ? String(value) : "")}
-                              />
-                              <LabelList
-                                dataKey={`${emp}_incoming`}
-                                position="bottom"
-                                content={(props: any) => {
-                                  const payload = props.payload || {};
-                                  const total =
-                                    (Number(payload[`${emp}_incoming`]) || 0) +
-                                    (Number(payload[`${emp}_outgoing`]) || 0) +
-                                    (Number(payload[`${emp}_missed`]) || 0);
-                                  if (total === 0) return null;
-                                  const cx = (props.x || 0) + (props.width || 0) / 2;
-                                  const y = (props.y || 0) + (props.height || 0);
-                                  return (
-                                    <text x={cx} y={y + 14} textAnchor="middle" fill="#f8fafc" fontSize={11} fontWeight={700}>
-                                      {initials}
-                                    </text>
-                                  );
-                                }}
                               />
                             </Bar>,
                             <Bar
@@ -1341,6 +1498,7 @@ export default function CallLogsPage() {
                               stackId={emp}
                               fill={COMPARE_CALL_TYPE_COLORS.missed}
                               radius={[4, 4, 0, 0]}
+                              label={makeEmployeeStackTopBarLabel(emp)}
                             >
                               <LabelList
                                 dataKey={`${emp}_missed`}
@@ -1349,25 +1507,6 @@ export default function CallLogsPage() {
                                 fontSize={9}
                                 fontWeight={600}
                                 formatter={(value: any) => (value > 0 ? String(value) : "")}
-                              />
-                              <LabelList
-                                dataKey={`${emp}_missed`}
-                                position="top"
-                                content={(props: any) => {
-                                  const payload = props.payload || {};
-                                  const total =
-                                    (Number(payload[`${emp}_incoming`]) || 0) +
-                                    (Number(payload[`${emp}_outgoing`]) || 0) +
-                                    (Number(payload[`${emp}_missed`]) || 0);
-                                  if (total === 0) return null;
-                                  const cx = (props.x || 0) + (props.width || 0) / 2;
-                                  const y = props.y ?? 0;
-                                  return (
-                                    <text x={cx} y={y - 6} textAnchor="middle" fill="#94a3b8" fontSize={11} fontWeight={600}>
-                                      {total}
-                                    </text>
-                                  );
-                                }}
                               />
                             </Bar>,
                           ];
@@ -1382,7 +1521,9 @@ export default function CallLogsPage() {
                 {compareGraphEmployees.length > 0 && (
                   <div className="pt-3 border-t border-slate-800 space-y-3">
                     <div>
-                      <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Employees (initials on bars)</div>
+                      <div className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">
+                        Employees (name + initials above each column)
+                      </div>
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                         {compareGraphEmployees.map((emp) => (
                           <div key={emp} className="flex items-center gap-1.5">
