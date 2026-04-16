@@ -20,12 +20,28 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend, ChartD
 const COL = { incoming: "#22c55e", outgoing: "#3b82f6", missed: "#ef4444" };
 
 function getInitials(name: string) {
-  return name
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+  const cleaned = String(name ?? "")
+    .replace(/[_\-.,/\\|()]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) return "—";
+
+  const parts = cleaned
+    .split(" ")
+    .map((p) => p.replace(/[^a-zA-Z0-9]/g, ""))
+    .filter(Boolean);
+
+  if (parts.length === 0) return "—";
+
+  if (parts.length === 1) {
+    const p = parts[0].toUpperCase();
+    return p.slice(0, 2);
+  }
+
+  const a = parts[0][0] ?? "";
+  const b = parts[1][0] ?? "";
+  return `${a}${b}`.toUpperCase().slice(0, 2) || "—";
 }
 
 function truncateName(name: string, maxChars: number) {

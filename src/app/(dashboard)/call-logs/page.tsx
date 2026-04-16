@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle, ChevronDown } from "lucide-react";
-import { format, subDays, startOfDay, endOfDay } from "date-fns";
+import { format, addDays, subDays, startOfDay, endOfDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { DateRange } from "react-day-picker";
@@ -74,7 +74,7 @@ export default function CallLogsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("ALL");
-  const [dateFilter, setDateFilter] = useState<"ALL" | "TODAY" | "YESTERDAY" | "CUSTOM">("TODAY");
+  const [dateFilter, setDateFilter] = useState<"ALL" | "TODAY" | "TOMORROW" | "YESTERDAY" | "CUSTOM">("TODAY");
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const [selectedEmployee, setSelectedEmployee] = useState<string>("ALL");
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
@@ -84,6 +84,8 @@ export default function CallLogsPage() {
   const [comparisonMode, setComparisonMode] = useState(false);
   const [divideByEmployee, setDivideByEmployee] = useState(false);
   const [hideShortCalls, setHideShortCalls] = useState(true); // default: keep >=10s (except MISSED)
+  const [hidePersonalContacts, setHidePersonalContacts] = useState(false);
+  const [hideStaffContacts, setHideStaffContacts] = useState(false);
   const [comparisonPanels, setComparisonPanels] = useState<
     Array<{ id: string; dateFilter: "TODAY" | "YESTERDAY" | "CUSTOM" }>
   >([]);
@@ -96,6 +98,8 @@ export default function CallLogsPage() {
   const [fcmWakeState, setFcmWakeState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [fcmWakeMsg, setFcmWakeMsg] = useState("");
   const [fcmWakePingAll, setFcmWakePingAll] = useState(true);
+  const logsCacheRef = useRef<Map<string, { logs: any[]; totalCount: number }>>(new Map());
+  const latestFetchKeyRef = useRef<string>("");
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 640px)");
@@ -195,17 +199,17 @@ export default function CallLogsPage() {
   }, [typeFilter, dateFilter, dateRange]);
 
   const fetchLogs = async () => {
-    setIsLoading(true);
-    try {
-      const url = new URL("/api/call-logs", window.location.origin);
-      if (typeFilter !== "ALL") url.searchParams.append("callType", typeFilter);
-
+    const getRange = () => {
       let start: Date | null = null;
       let end: Date | null = null;
 
       if (dateFilter === "TODAY") {
         start = startOfDay(new Date());
         end = endOfDay(new Date());
+      } else if (dateFilter === "TOMORROW") {
+        const tomorrow = addDays(new Date(), 1);
+        start = startOfDay(tomorrow);
+        end = endOfDay(tomorrow);
       } else if (dateFilter === "YESTERDAY") {
         const yesterday = subDays(new Date(), 1);
         start = startOfDay(yesterday);
@@ -215,25 +219,52 @@ export default function CallLogsPage() {
         end = dateRange.to ? endOfDay(dateRange.to) : endOfDay(dateRange.from);
       }
 
+      return { start, end };
+    };
+
+    const { start, end } = getRange();
+    const cacheKey = JSON.stringify({
+      typeFilter,
+      dateFilter,
+      start: start?.toISOString() ?? null,
+      end: end?.toISOString() ?? null,
+    });
+    latestFetchKeyRef.current = cacheKey;
+
+    const cached = logsCacheRef.current.get(cacheKey);
+    if (cached) {
+      setLogs(cached.logs);
+      setTotalCount(cached.totalCount);
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const url = new URL("/api/call-logs", window.location.origin);
+      if (typeFilter !== "ALL") url.searchParams.append("callType", typeFilter);
+
       if (start) url.searchParams.append("startDate", start.toISOString());
       if (end) url.searchParams.append("endDate", end.toISOString());
 
       const res = await fetch(url.toString());
       if (res.ok) {
         const data = await res.json();
+        const nextPayload = Array.isArray(data)
+          ? { logs: data, totalCount: data.length }
+          : { logs: data.logs || [], totalCount: data.totalCount || 0 };
+        logsCacheRef.current.set(cacheKey, nextPayload);
+        if (latestFetchKeyRef.current !== cacheKey) return;
         // Handle both older array returns and newer object returns
-        if (Array.isArray(data)) {
-          setLogs(data);
-          setTotalCount(data.length);
-        } else {
-          setLogs(data.logs || []);
-          setTotalCount(data.totalCount || 0);
-        }
+        setLogs(nextPayload.logs);
+        setTotalCount(nextPayload.totalCount);
       }
     } catch (error) {
       console.error("Failed to fetch call logs:", error);
     } finally {
-      setIsLoading(false);
+      if (latestFetchKeyRef.current === cacheKey) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -312,7 +343,7 @@ export default function CallLogsPage() {
   });
 
   // Deduplicate logs introduced by an old Android app bug
-  const filteredLogs = useMemo(() => {
+  const dedupedFilteredLogs = useMemo(() => {
     const uniqueLogs: any[] = [];
     
     // Sort raw logs descending by timestamp first so the newest in a duplicate cluster comes first
@@ -357,17 +388,29 @@ export default function CallLogsPage() {
     return uniqueLogs;
   }, [rawFilteredLogs]);
 
+  const filteredLogs = useMemo(() => {
+    if (!hidePersonalContacts && !hideStaffContacts) return dedupedFilteredLogs;
+
+    return dedupedFilteredLogs.filter((log) => {
+      const key = `${log.phoneNumber}|${getEmployeeName(log)}`;
+      const category = intelligenceTags[key]?.category;
+      if (hidePersonalContacts && category === "personal") return false;
+      if (hideStaffContacts && category === "staff") return false;
+      return true;
+    });
+  }, [dedupedFilteredLogs, hidePersonalContacts, hideStaffContacts, intelligenceTags]);
+
   const graphDisplayLogs = useMemo(
     () => filteredLogs.filter((log) => !ignoredEmployeeSet.has(getEmployeeName(log))),
     [filteredLogs, ignoredEmployeeSet]
   );
 
   useEffect(() => {
-    if (filteredLogs.length > 0) {
-      fetchTags(filteredLogs);
-      fetchIntelligenceTags(filteredLogs);
+    if (dedupedFilteredLogs.length > 0) {
+      fetchTags(dedupedFilteredLogs);
+      fetchIntelligenceTags(dedupedFilteredLogs);
     }
-  }, [logs, searchQuery, selectedEmployee]);
+  }, [dedupedFilteredLogs]);
 
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -1055,6 +1098,34 @@ export default function CallLogsPage() {
               >
                 {hideShortCalls ? "≥10s only" : "All durations"}
               </button>
+
+              <button
+                type="button"
+                onClick={() => setHidePersonalContacts((v) => !v)}
+                className={cn(
+                  "px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors border",
+                  hidePersonalContacts
+                    ? "bg-violet-600/15 border-violet-500/30 text-violet-300 hover:bg-violet-600/25"
+                    : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-slate-100"
+                )}
+                title={hidePersonalContacts ? "Personal identified contacts are hidden" : "Show all contacts including personal"}
+              >
+                {hidePersonalContacts ? "Personal hidden" : "Hide personal"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setHideStaffContacts((v) => !v)}
+                className={cn(
+                  "px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors border",
+                  hideStaffContacts
+                    ? "bg-sky-600/15 border-sky-500/30 text-sky-300 hover:bg-sky-600/25"
+                    : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-slate-100"
+                )}
+                title={hideStaffContacts ? "Staff identified contacts are hidden" : "Show all contacts including staff"}
+              >
+                {hideStaffContacts ? "Staff hidden" : "Hide staff"}
+              </button>
             </div>
 
             {/* Date Filters */}
@@ -1212,7 +1283,7 @@ export default function CallLogsPage() {
                           tickCount={10}
                         />
                         <RechartsTooltip content={<AnalyticsTooltip />} />
-                        <Bar dataKey="incoming" stackId="calls" fill="#22c55e">
+                        <Bar dataKey="incoming" stackId="calls" fill="#22c55e" isAnimationActive={false}>
                           <LabelList
                             dataKey="incoming"
                             position="center"
@@ -1222,7 +1293,7 @@ export default function CallLogsPage() {
                             formatter={(value: any) => (value > 0 ? String(value) : "")}
                           />
                         </Bar>
-                        <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6">
+                        <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6" isAnimationActive={false}>
                           <LabelList
                             dataKey="outgoing"
                             position="center"
@@ -1232,7 +1303,7 @@ export default function CallLogsPage() {
                             formatter={(value: any) => (value > 0 ? String(value) : "")}
                           />
                         </Bar>
-                        <Bar dataKey="missed" stackId="calls" fill="#ef4444" radius={[4, 4, 0, 0]}>
+                        <Bar dataKey="missed" stackId="calls" fill="#ef4444" radius={[4, 4, 0, 0]} isAnimationActive={false}>
                           <LabelList
                             dataKey="missed"
                             position="center"
@@ -1247,6 +1318,7 @@ export default function CallLogsPage() {
                           dataKey="total"
                           stroke="transparent"
                           activeDot={false}
+                          isAnimationActive={false}
                           dot={(props: any) => {
                             const { cx, cy, payload } = props;
                             if (!payload || payload.total === 0) return null;
@@ -1431,23 +1503,23 @@ export default function CallLogsPage() {
                     </div>
                   ) : (
                     <div className="w-full h-full flex flex-col">
-                      <p className="text-[11px] text-slate-500 mb-1 sm:hidden">Swipe horizontally to see all hours</p>
-                      <div className="overflow-x-auto w-full flex-1 min-h-0" style={{ WebkitOverflowScrolling: "touch" }}>
-                        <div className="h-full min-h-[300px] w-full" style={{ minWidth: Math.max(singleGraphChartData.length * (isDesktop ? 130 : 72), isDesktop ? 520 : 320) }}>
+                      <div className="w-full flex-1 min-h-0">
+                        <div className="h-full min-h-[300px] w-full">
                           <ResponsiveContainer width="100%" height="100%" minHeight={300}>
                       <ComposedChart
                         data={singleGraphChartData}
                         margin={{ top: 58, right: 16, left: 8, bottom: 88 }}
-                        barCategoryGap="8%"
+                        barCategoryGap="18%"
                         barGap={0}
                       >
                         <XAxis
                           dataKey="timeRange"
                           tickLine={false}
                           axisLine={{ stroke: "#1f2937" }}
-                          tick={{ fill: "#9ca3af", fontSize: 11, textAnchor: "end" }}
-                          interval={0}
-                          angle={-45}
+                          tick={{ fill: "#9ca3af", fontSize: 10 }}
+                          interval="preserveStartEnd"
+                          minTickGap={14}
+                          angle={0}
                         />
                         <YAxis
                           allowDecimals={false}

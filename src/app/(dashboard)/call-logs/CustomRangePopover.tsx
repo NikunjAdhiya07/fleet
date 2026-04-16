@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Calendar as CalendarIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type DateFilter = "ALL" | "TODAY" | "YESTERDAY" | "CUSTOM";
+type DateFilter = "ALL" | "TODAY" | "TOMORROW" | "YESTERDAY" | "CUSTOM";
 
 type Props = {
   dateFilter: DateFilter;
