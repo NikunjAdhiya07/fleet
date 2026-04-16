@@ -46,27 +46,50 @@ function topStackLabelAnchor(
   stackId: string,
   dataIndex: number
 ): { cx: number; yTop: number; barW: number } | null {
-  const order: Seg[] = ["missed", "outgoing", "incoming"];
-  for (const seg of order) {
-    const di = chart.data.datasets.findIndex(
-      (d) => (d as { stack?: string; segment?: Seg }).stack === stackId && (d as { segment?: Seg }).segment === seg
-    );
-    if (di < 0) continue;
+  let best: { cx: number; yTop: number; barW: number } | null = null;
+
+  for (let di = 0; di < chart.data.datasets.length; di++) {
+    const ds = chart.data.datasets[di] as { stack?: string };
+    if (ds.stack !== stackId) continue;
+
     const meta = chart.getDatasetMeta(di);
-    const raw = meta.data[dataIndex] as unknown as
+    const el = meta.data?.[dataIndex] as
       | {
-          getProps: (keys: string[]) => { x: number; y: number; base: number; width: number; height: number };
+          getProps?: (keys: string[]) => { x: number; y: number; base: number; width: number; height: number };
+          x?: number;
+          y?: number;
+          base?: number;
+          width?: number;
           skip?: boolean;
         }
       | undefined;
-    if (!raw || raw.skip) continue;
-    const { x, y, base, width, height } = raw.getProps(["x", "y", "base", "width", "height"]);
-    if (width > 0 && height > 0) {
-      const yTop = typeof base === "number" && !Number.isNaN(base) ? Math.min(y, base) : y;
-      return { cx: x, yTop, barW: width };
+    if (!el || el.skip) continue;
+
+    const props =
+      typeof el.getProps === "function"
+        ? el.getProps(["x", "y", "base", "width", "height"])
+        : {
+            x: Number(el.x ?? 0),
+            y: Number(el.y ?? 0),
+            base: Number(el.base ?? el.y ?? 0),
+            width: Number(el.width ?? 0),
+            height: 0,
+          };
+
+    const width = Number(props.width) || 0;
+    if (width <= 0) continue;
+
+    const y = Number(props.y);
+    const base = Number(props.base);
+    const yTop = Number.isFinite(base) ? Math.min(y, base) : y;
+    if (!Number.isFinite(yTop)) continue;
+
+    if (!best || yTop < best.yTop) {
+      best = { cx: Number(props.x), yTop, barW: width };
     }
   }
-  return null;
+
+  return best;
 }
 
 function makeEmployeeTopLabelsPlugin(employees: string[], rows: DivideByEmployeeRow[]): Plugin {
@@ -74,6 +97,8 @@ function makeEmployeeTopLabelsPlugin(employees: string[], rows: DivideByEmployee
     id: "divideByEmployeeTopLabels",
     afterDatasetsDraw(chart) {
       const ctx = chart.ctx;
+      const topBound = chart.chartArea?.top ?? 0;
+      const clamp = (v: number, min: number) => (v < min ? min : v);
       employees.forEach((emp) => {
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
@@ -87,6 +112,8 @@ function makeEmployeeTopLabelsPlugin(employees: string[], rows: DivideByEmployee
 
           const nameLine = truncateName(emp, Math.max(4, Math.floor(pos.barW / 5.5)));
           const initials = getInitials(emp);
+          const yName = clamp(pos.yTop - 18, topBound + 12);
+          const yInit = clamp(pos.yTop - 4, topBound + 28);
 
           ctx.save();
           ctx.textAlign = "center";
@@ -96,15 +123,15 @@ function makeEmployeeTopLabelsPlugin(employees: string[], rows: DivideByEmployee
           ctx.lineWidth = 3;
           ctx.strokeStyle = "rgba(15, 23, 42, 0.95)";
           ctx.fillStyle = "#cbd5e1";
-          ctx.strokeText(nameLine, pos.cx, pos.yTop - 18);
-          ctx.fillText(nameLine, pos.cx, pos.yTop - 18);
+          ctx.strokeText(nameLine, pos.cx, yName);
+          ctx.fillText(nameLine, pos.cx, yName);
 
           ctx.font = "800 11px system-ui, -apple-system, Segoe UI, sans-serif";
           ctx.lineWidth = 3.5;
           ctx.strokeStyle = "rgba(10, 20, 40, 0.95)";
           ctx.fillStyle = "#ffffff";
-          ctx.strokeText(initials, pos.cx, pos.yTop - 4);
-          ctx.fillText(initials, pos.cx, pos.yTop - 4);
+          ctx.strokeText(initials, pos.cx, yInit);
+          ctx.fillText(initials, pos.cx, yInit);
           ctx.restore();
         }
       });
@@ -173,7 +200,7 @@ export function DivideByEmployeeChartJs({ rows, employees, minWidthPx }: Props) 
         responsive: true,
         maintainAspectRatio: false,
         indexAxis: "x" as const,
-        layout: { padding: { top: 52, right: 4, left: 4, bottom: 4 } },
+        layout: { padding: { top: 64, right: 4, left: 4, bottom: 4 } },
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -197,10 +224,23 @@ export function DivideByEmployeeChartJs({ rows, employees, minWidthPx }: Props) 
           },
           datalabels: { clip: false },
         },
+        datasets: {
+          bar: {
+            categoryPercentage: 0.9,
+            barPercentage: 1.0,
+            maxBarThickness: 18,
+          },
+        },
         scales: {
           x: {
             stacked: true,
-            ticks: { color: "#9ca3af", maxRotation: 45, minRotation: 45, font: { size: 10 } },
+            ticks: {
+              color: "#9ca3af",
+              autoSkip: true,
+              maxRotation: 0,
+              minRotation: 0,
+              font: { size: 10 },
+            },
             grid: { color: "rgba(31, 41, 55, 0.45)" },
           },
           y: {

@@ -83,6 +83,7 @@ export default function CallLogsPage() {
   const logsRef = useRef<HTMLDivElement>(null);
   const [comparisonMode, setComparisonMode] = useState(false);
   const [divideByEmployee, setDivideByEmployee] = useState(false);
+  const [hideShortCalls, setHideShortCalls] = useState(true); // default: keep >=10s (except MISSED)
   const [comparisonPanels, setComparisonPanels] = useState<
     Array<{ id: string; dateFilter: "TODAY" | "YESTERDAY" | "CUSTOM" }>
   >([]);
@@ -305,7 +306,9 @@ export default function CallLogsPage() {
       searchQuery === "" || log.phoneNumber.includes(searchQuery);
     const matchesEmployee =
       selectedEmployee === "ALL" || getEmployeeName(log) === selectedEmployee;
-    return matchesSearch && matchesEmployee;
+    const durationSec = Number(log.duration) || 0;
+    const keepByDuration = !hideShortCalls || log.callType === "MISSED" || durationSec >= 10;
+    return matchesSearch && matchesEmployee && keepByDuration;
   });
 
   // Deduplicate logs introduced by an old Android app bug
@@ -1038,6 +1041,20 @@ export default function CallLogsPage() {
                   {type}
                 </button>
               ))}
+
+              <button
+                type="button"
+                onClick={() => setHideShortCalls((v) => !v)}
+                className={cn(
+                  "px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors border",
+                  hideShortCalls
+                    ? "bg-emerald-600/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/25"
+                    : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-slate-100"
+                )}
+                title={hideShortCalls ? "Showing calls ≥ 10s (missed always kept)" : "Showing all call durations"}
+              >
+                {hideShortCalls ? "≥10s only" : "All durations"}
+              </button>
             </div>
 
             {/* Date Filters */}
@@ -1167,24 +1184,10 @@ export default function CallLogsPage() {
                 Everyone is excluded from the chart. Clear exclusions above or pick different employees.
               </div>
             ) : (divideByEmployee ? chartDataDividedByEmployee.length > 0 : chartData.length > 0) ? (
-              <div className={cn("w-full h-full", divideByEmployee && "overflow-x-auto")} style={{ WebkitOverflowScrolling: "touch" }}>
-                <div
-                  className="h-full w-full"
-                  style={{
-                    minWidth: divideByEmployee
-                      ? Math.max((chartDataDividedByEmployee.length || 0) * (isDesktop ? 150 : 92), isDesktop ? 720 : 360)
-                      : undefined,
-                  }}
-                >
+              <div className="w-full h-full">
+                <div className="h-full w-full">
                   {divideByEmployee ? (
-                    <DivideByEmployeeChartJs
-                      rows={chartDataDividedByEmployee}
-                      employees={divideGraphEmployees}
-                      minWidthPx={Math.max(
-                        (chartDataDividedByEmployee.length || 0) * (isDesktop ? 150 : 92),
-                        isDesktop ? 720 : 360
-                      )}
-                    />
+                    <DivideByEmployeeChartJs rows={chartDataDividedByEmployee} employees={divideGraphEmployees} />
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart
