@@ -53,6 +53,26 @@ export type DivideByEmployeeRow = Record<string, string | number>;
 
 type Seg = "missed" | "outgoing" | "incoming";
 
+type BarElementLike = {
+  getProps?: (keys: string[]) => Partial<{
+    x: number;
+    y: number;
+    base: number;
+    width: number;
+    height: number;
+  }>;
+  x?: number;
+  y?: number;
+  base?: number;
+  width?: number;
+  skip?: boolean;
+};
+
+function isBarElementLike(value: unknown): value is BarElementLike {
+  if (!value || typeof value !== "object") return false;
+  return true;
+}
+
 /**
  * For Chart.js vertical bars, `x` is already the bar’s horizontal center (not the left edge).
  * See getBarBounds(): left = x - width/2. Do not add width/2 again or captions shift sideways.
@@ -69,16 +89,8 @@ function topStackLabelAnchor(
     if (ds.stack !== stackId) continue;
 
     const meta = chart.getDatasetMeta(di);
-    const el = meta.data?.[dataIndex] as
-      | {
-          getProps?: (keys: string[]) => { x: number; y: number; base: number; width: number; height: number };
-          x?: number;
-          y?: number;
-          base?: number;
-          width?: number;
-          skip?: boolean;
-        }
-      | undefined;
+    const candidate = meta.data?.[dataIndex] as unknown;
+    const el = isBarElementLike(candidate) ? candidate : undefined;
     if (!el || el.skip) continue;
 
     const props =

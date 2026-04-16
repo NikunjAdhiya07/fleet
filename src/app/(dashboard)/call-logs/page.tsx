@@ -100,6 +100,8 @@ export default function CallLogsPage() {
   const [fcmWakePingAll, setFcmWakePingAll] = useState(true);
   const logsCacheRef = useRef<Map<string, { logs: any[]; totalCount: number }>>(new Map());
   const latestFetchKeyRef = useRef<string>("");
+  const fetchedTagPhonesRef = useRef<Set<string>>(new Set());
+  const fetchedIntelligencePairsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 640px)");
@@ -270,19 +272,25 @@ export default function CallLogsPage() {
 
   const fetchTags = async (logsToProcess: any[]) => {
     const uniquePhones = [...new Set(logsToProcess.map((log) => log.phoneNumber))];
-    if (uniquePhones.length === 0) return;
+    const uncachedPhones = uniquePhones.filter((phone) => !fetchedTagPhonesRef.current.has(phone));
+    if (uncachedPhones.length === 0) return;
+
+    uncachedPhones.forEach((phone) => fetchedTagPhonesRef.current.add(phone));
 
     try {
       const res = await fetch("/api/contacts/tags/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phoneNumbers: uniquePhones }),
+        body: JSON.stringify({ phoneNumbers: uncachedPhones }),
       });
       if (res.ok) {
         const data = await res.json();
         setTags((prev) => ({ ...prev, ...data.tags }));
+      } else {
+        uncachedPhones.forEach((phone) => fetchedTagPhonesRef.current.delete(phone));
       }
     } catch (error) {
+      uncachedPhones.forEach((phone) => fetchedTagPhonesRef.current.delete(phone));
       console.error("Failed to fetch tags:", error);
     }
   };
@@ -296,18 +304,34 @@ export default function CallLogsPage() {
         })
       ).values()
     );
-    if (pairs.length === 0) return;
+    const uncachedPairs = pairs.filter(({ phoneNumber, employeeName }) => {
+      const key = `${phoneNumber}|${employeeName}`;
+      return !fetchedIntelligencePairsRef.current.has(key);
+    });
+    if (uncachedPairs.length === 0) return;
+
+    uncachedPairs.forEach(({ phoneNumber, employeeName }) => {
+      fetchedIntelligencePairsRef.current.add(`${phoneNumber}|${employeeName}`);
+    });
+
     try {
       const res = await fetch("/api/contact-intelligence/tags-bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pairs }),
+        body: JSON.stringify({ pairs: uncachedPairs }),
       });
       if (res.ok) {
         const data = await res.json();
         setIntelligenceTags((prev) => ({ ...prev, ...data.tags }));
+      } else {
+        uncachedPairs.forEach(({ phoneNumber, employeeName }) => {
+          fetchedIntelligencePairsRef.current.delete(`${phoneNumber}|${employeeName}`);
+        });
       }
     } catch (error) {
+      uncachedPairs.forEach(({ phoneNumber, employeeName }) => {
+        fetchedIntelligencePairsRef.current.delete(`${phoneNumber}|${employeeName}`);
+      });
       console.error("Failed to fetch intelligence tags:", error);
     }
   };
@@ -332,15 +356,17 @@ export default function CallLogsPage() {
   const getEmployeeName = (log: any) =>
     log.employeeName || log.driverId?.userId?.name || "Unknown";
 
-  const rawFilteredLogs = logs.filter((log) => {
-    const matchesSearch =
-      searchQuery === "" || log.phoneNumber.includes(searchQuery);
-    const matchesEmployee =
-      selectedEmployee === "ALL" || getEmployeeName(log) === selectedEmployee;
-    const durationSec = Number(log.duration) || 0;
-    const keepByDuration = !hideShortCalls || log.callType === "MISSED" || durationSec >= 10;
-    return matchesSearch && matchesEmployee && keepByDuration;
-  });
+  const rawFilteredLogs = useMemo(() => {
+    return logs.filter((log) => {
+      const matchesSearch =
+        searchQuery === "" || log.phoneNumber.includes(searchQuery);
+      const matchesEmployee =
+        selectedEmployee === "ALL" || getEmployeeName(log) === selectedEmployee;
+      const durationSec = Number(log.duration) || 0;
+      const keepByDuration = !hideShortCalls || log.callType === "MISSED" || durationSec >= 10;
+      return matchesSearch && matchesEmployee && keepByDuration;
+    });
+  }, [logs, searchQuery, selectedEmployee, hideShortCalls]);
 
   // Deduplicate logs introduced by an old Android app bug
   const dedupedFilteredLogs = useMemo(() => {
