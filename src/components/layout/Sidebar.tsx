@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Users, Map, Navigation, CreditCard, Phone, UserCog, FileText, X, Activity, Contact, Trash2, PieChart, BrainCircuit, BotMessageSquare, ScrollText, UserCheck, Smartphone } from "lucide-react";
+import { LayoutDashboard, Users, Map, Navigation, CreditCard, Phone, UserCog, FileText, X, Activity, Contact, Trash2, PieChart, BrainCircuit, BotMessageSquare, ScrollText, UserCheck, Smartphone, PhoneCall } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar } from "./SidebarContext";
 
@@ -13,6 +13,7 @@ const sidebarNavItems = [
   { title: "Trips", href: "/trips", icon: Navigation },
   { title: "Expenses", href: "/expenses", icon: CreditCard },
   { title: "Call Logs", href: "/call-logs", icon: Phone },
+  { title: "Call Tracker", href: "/call-tracker", icon: PhoneCall },
   { title: "Analytics", href: "/analytics", icon: PieChart },
   { title: "Contact Intelligence", href: "/contact-intelligence", icon: BrainCircuit },
   { title: "Identified Contacts", href: "/identified-contacts", icon: UserCheck },
