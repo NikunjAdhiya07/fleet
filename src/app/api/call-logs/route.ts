@@ -5,6 +5,7 @@ import connectToDatabase from "@/lib/db";
 import CallLog from "@/models/CallLog";
 import DeviceCallLog from "@/models/DeviceCallLog";
 import EmployeeTelegram from "@/models/EmployeeTelegram";
+import EmployeeDepartment from "@/models/EmployeeDepartment";
 import mongoose from "mongoose";
 
 export async function GET(req: Request) {
@@ -75,18 +76,62 @@ export async function GET(req: Request) {
           select: "userId",
           populate: {
             path: "userId",
-            select: "name email",
-            model: "User"
+            select: "name email departmentId",
+            model: "User",
+            populate: {
+              path: "departmentId",
+              select: "name",
+              model: "Department",
+            },
           }
         })
         .lean(),
       DeviceCallLog.find(query).lean()
     ]);
 
-    // Merge and sort
-    const logs = [...mainLogs, ...deviceLogs].sort((a: any, b: any) => 
-      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    const merged = [...mainLogs, ...deviceLogs];
+
+    // Attach department info for name-only employees via EmployeeDepartment mapping.
+    // (Driver-backed logs already populate User.departmentId -> Department.)
+    const employeeNames = Array.from(
+      new Set(
+        merged
+          .map((l: any) => String(l?.employeeName ?? "").trim())
+          .filter((n: string) => n.length > 0 && n.toLowerCase() !== "unknown")
+      )
     );
+
+    let mappingByName = new Map<string, { departmentName: string; departmentId: string }>();
+    if (employeeNames.length > 0) {
+      const mappingQuery: any = { employeeName: { $in: employeeNames } };
+      if (session!.user.role !== "super_admin") {
+        mappingQuery.companyId = new mongoose.Types.ObjectId(session!.user.companyId!);
+      }
+      const mappings = await EmployeeDepartment.find(mappingQuery)
+        .populate({ path: "departmentId", select: "name", model: "Department" })
+        .lean();
+      mappingByName = new Map(
+        (mappings as any[]).map((m) => [
+          String(m.employeeName),
+          {
+            departmentName: String((m.departmentId as any)?.name ?? ""),
+            departmentId: String((m.departmentId as any)?._id ?? ""),
+          },
+        ])
+      );
+    }
+
+    const logs = merged
+      .map((l: any) => {
+        if (l?.employeeName) {
+          const hit = mappingByName.get(String(l.employeeName).trim());
+          if (hit?.departmentName) {
+            return { ...l, employeeDepartment: hit };
+          }
+        }
+        return l;
+      })
+      .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     return NextResponse.json({ logs, totalCount });
   } catch (error) {

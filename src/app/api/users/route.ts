@@ -26,6 +26,15 @@ export async function GET(req: Request) {
       { $sort: { createdAt: -1 } },
       {
         $lookup: {
+          from: "departments",
+          localField: "departmentId",
+          foreignField: "_id",
+          as: "department",
+        },
+      },
+      { $addFields: { department: { $arrayElemAt: ["$department", 0] } } },
+      {
+        $lookup: {
           from: "drivers",
           localField: "_id",
           foreignField: "userId",
@@ -65,7 +74,7 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { name, email, username, password, role } = body;
+    const { name, email, username, password, role, departmentId } = body;
 
     if (!name || !email || !password || !role) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -96,6 +105,7 @@ export async function POST(req: Request) {
       passwordHash,
       role,
       companyId: new mongoose.Types.ObjectId(companyId),
+      departmentId: departmentId ? new mongoose.Types.ObjectId(departmentId) : undefined,
     });
 
     // Automatically create Driver profile if role is driver
@@ -125,7 +135,7 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { _id, name, email, username, password, role } = await req.json();
+    const { _id, name, email, username, password, role, departmentId } = await req.json();
 
     if (!_id) {
       return NextResponse.json({ error: "User ID is required" }, { status: 400 });
@@ -162,6 +172,13 @@ export async function PUT(req: Request) {
     }
 
     if (name) userToUpdate.name = name;
+
+    // Department assignment is optional; allow clearing with empty string / null
+    if (departmentId !== undefined) {
+      userToUpdate.departmentId = departmentId
+        ? new mongoose.Types.ObjectId(departmentId)
+        : undefined;
+    }
     
     // Changing role might mean we need to spin up a Driver profile, or handle orphans
     if (role && role !== userToUpdate.role) {

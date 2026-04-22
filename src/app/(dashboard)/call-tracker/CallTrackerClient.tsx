@@ -71,6 +71,17 @@ export function CallTrackerClient() {
     setEmployees(Array.isArray(data.employees) ? data.employees : []);
   };
 
+  const broadcastEmployeesChanged = () => {
+    try {
+      window.localStorage.setItem("app:invalidateEmployees", String(Date.now()));
+      window.localStorage.setItem("app:invalidateCallLogs", String(Date.now()));
+    } catch {
+      // ignore
+    }
+    window.dispatchEvent(new Event("app:invalidateEmployees"));
+    window.dispatchEvent(new Event("app:invalidateCallLogs"));
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -103,6 +114,9 @@ export function CallTrackerClient() {
       setNeeds(data.needs);
       setPendingMobile(normDigits(payload.mobileNumber));
       setLastLogged(data.row ?? null);
+      // New calls can introduce new employees in downstream views.
+      void fetchEmployees();
+      broadcastEmployeesChanged();
       return data as { needs: typeof needs; row: Row; rows: Row[]; categories: Category[] };
     } catch (e: any) {
       setError(String(e?.message ?? e ?? "Something went wrong"));
@@ -205,6 +219,8 @@ export function CallTrackerClient() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "Sync failed");
       setState({ rows: data.rows, categories: data.categories });
+      void fetchEmployees();
+      broadcastEmployeesChanged();
     } catch (e: any) {
       setError(String(e?.message ?? e ?? "Sync failed"));
     } finally {

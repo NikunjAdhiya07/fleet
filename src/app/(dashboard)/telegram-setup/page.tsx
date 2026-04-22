@@ -35,6 +35,15 @@ export default function TelegramSetupPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
+  const broadcastEmployeesChanged = () => {
+    try {
+      window.localStorage.setItem("app:invalidateEmployees", String(Date.now()));
+    } catch {
+      // ignore
+    }
+    window.dispatchEvent(new Event("app:invalidateEmployees"));
+  };
+
   // Inline phone editing state — maps employeeName → draft phone string
   const [editingPhone, setEditingPhone] = useState<Record<string, string>>({});
   const [savingPhone, setSavingPhone] = useState<string | null>(null);
@@ -95,6 +104,7 @@ export default function TelegramSetupPage() {
           return next;
         });
         fetchEmployees();
+        broadcastEmployeesChanged();
       }
     } finally {
       setSavingPhone(null);
@@ -112,6 +122,7 @@ export default function TelegramSetupPage() {
         body: JSON.stringify({ id }),
       });
       fetchEmployees();
+      broadcastEmployeesChanged();
     } finally {
       setActionLoading(null);
     }
@@ -124,6 +135,7 @@ export default function TelegramSetupPage() {
     try {
       await fetch(`/api/telegram/employees?id=${id}`, { method: "DELETE" });
       fetchEmployees();
+      broadcastEmployeesChanged();
     } finally {
       setActionLoading(null);
     }
@@ -151,6 +163,7 @@ export default function TelegramSetupPage() {
         setManualName("");
         setManualPhone("");
         fetchEmployees();
+        broadcastEmployeesChanged();
       }
     } finally {
       setManualSubmitting(false);

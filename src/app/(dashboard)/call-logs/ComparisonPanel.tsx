@@ -27,6 +27,7 @@ import {
   ResponsiveContainer,
   LabelList,
 } from "recharts";
+import { isHourExcluded } from "./timeExclusion";
 
 const PANEL_ACCENTS = [
   {
@@ -58,15 +59,25 @@ const PANEL_ACCENTS = [
 interface ComparisonPanelProps {
   panelIndex: number;
   initialDateFilter?: "TODAY" | "YESTERDAY" | "CUSTOM";
+  excludedGraphHours?: number[];
   onRemove: () => void;
   canRemove: boolean;
+  onSelectFromPanel?: (sel: {
+    start: Date;
+    end: Date;
+    hour: number;
+    callType?: "INCOMING" | "OUTGOING" | "MISSED";
+    employee?: string;
+  }) => void;
 }
 
 export default function ComparisonPanel({
   panelIndex,
   initialDateFilter = "TODAY",
+  excludedGraphHours = [],
   onRemove,
   canRemove,
+  onSelectFromPanel,
 }: ComparisonPanelProps) {
   const [dateFilter, setDateFilter] = useState<
     "TODAY" | "YESTERDAY" | "CUSTOM"
@@ -172,6 +183,16 @@ export default function ComparisonPanel({
     return unique;
   }, [logs, employee]);
 
+  const graphDisplayLogs = useMemo(() => {
+    if (!excludedGraphHours || excludedGraphHours.length === 0) return filteredLogs;
+    return filteredLogs.filter((log) => {
+      if (!log.timestamp) return true;
+      const d = new Date(log.timestamp);
+      if (isNaN(d.getTime())) return true;
+      return !isHourExcluded(d.getHours(), excludedGraphHours);
+    });
+  }, [filteredLogs, excludedGraphHours]);
+
   const timeBuckets = useMemo(() => {
     const labels = [];
     for (let hour = 0; hour < 24; hour++) {
@@ -195,7 +216,7 @@ export default function ComparisonPanel({
       missed: 0,
       total: 0,
     }));
-    filteredLogs.forEach((log) => {
+    graphDisplayLogs.forEach((log) => {
       if (!log.timestamp) return;
       const d = new Date(log.timestamp);
       if (isNaN(d.getTime())) return;
@@ -207,20 +228,20 @@ export default function ComparisonPanel({
       bucket.total++;
     });
     return base.filter((b) => b.total > 0);
-  }, [filteredLogs, timeBuckets]);
+  }, [graphDisplayLogs, timeBuckets]);
 
   const stats = useMemo(
     () => ({
-      total: filteredLogs.length,
-      incoming: filteredLogs.filter((l) => l.callType === "INCOMING").length,
-      outgoing: filteredLogs.filter((l) => l.callType === "OUTGOING").length,
-      missed: filteredLogs.filter((l) => l.callType === "MISSED").length,
-      totalDuration: filteredLogs.reduce(
+      total: graphDisplayLogs.length,
+      incoming: graphDisplayLogs.filter((l) => l.callType === "INCOMING").length,
+      outgoing: graphDisplayLogs.filter((l) => l.callType === "OUTGOING").length,
+      missed: graphDisplayLogs.filter((l) => l.callType === "MISSED").length,
+      totalDuration: graphDisplayLogs.reduce(
         (sum, l) => sum + (l.duration || 0),
         0
       ),
     }),
-    [filteredLogs]
+    [graphDisplayLogs]
   );
 
   const formatTotalDuration = (seconds: number) => {
@@ -269,6 +290,27 @@ export default function ComparisonPanel({
         : format(dateRange.from, "MMM d, y");
     }
     return "Select Date";
+  };
+
+  const getPanelRange = () => {
+    let start: Date | null = null;
+    let end: Date | null = null;
+    if (dateFilter === "TODAY") {
+      start = startOfDay(new Date());
+      end = endOfDay(new Date());
+    } else if (dateFilter === "YESTERDAY") {
+      start = startOfDay(subDays(new Date(), 1));
+      end = endOfDay(subDays(new Date(), 1));
+    } else if (dateFilter === "CUSTOM" && dateRange?.from) {
+      start = startOfDay(dateRange.from);
+      end = dateRange.to ? endOfDay(dateRange.to) : endOfDay(dateRange.from);
+    }
+    // Fallback: treat as today if unset
+    if (!start || !end) {
+      start = startOfDay(new Date());
+      end = endOfDay(new Date());
+    }
+    return { start, end };
   };
 
   return (
@@ -439,6 +481,26 @@ export default function ComparisonPanel({
                 data={chartData}
                 margin={{ top: 20, right: 0, left: -24, bottom: 60 }}
                 barCategoryGap="8%"
+                onClick={(e: any) => {
+                  if (!onSelectFromPanel) return;
+                  const ap = e?.activePayload;
+                  const hit = Array.isArray(ap) && ap.length > 0 ? ap[0] : null;
+                  const payload = hit?.payload;
+                  const dk = String(hit?.dataKey ?? "");
+                  if (!payload) return;
+                  const hour = Number(payload.hour);
+                  if (!Number.isFinite(hour)) return;
+                  const callType =
+                    dk === "incoming" ? "INCOMING" : dk === "outgoing" ? "OUTGOING" : dk === "missed" ? "MISSED" : undefined;
+                  const { start, end } = getPanelRange();
+                  onSelectFromPanel({
+                    start,
+                    end,
+                    hour,
+                    callType,
+                    employee: employee === "ALL" ? undefined : employee,
+                  });
+                }}
               >
                 <XAxis
                   dataKey="timeRange"
@@ -456,23 +518,25 @@ export default function ComparisonPanel({
                   tick={{ fill: "#9ca3af", fontSize: 9 }}
                 />
                 <RechartsTooltip content={<PanelTooltip />} />
-                <Bar dataKey="incoming" stackId="calls" fill="#22c55e">
+                <Bar dataKey="incoming" stackId="calls" fill="#22c55e" cursor="pointer">
                   <LabelList
                     dataKey="incoming"
                     position="center"
                     fill="#fff"
                     fontSize={9}
                     fontWeight={600}
+                    style={{ pointerEvents: "none" }}
                     formatter={(v: any) => (v > 0 ? String(v) : "")}
                   />
                 </Bar>
-                <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6">
+                <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6" cursor="pointer">
                   <LabelList
                     dataKey="outgoing"
                     position="center"
                     fill="#fff"
                     fontSize={9}
                     fontWeight={600}
+                    style={{ pointerEvents: "none" }}
                     formatter={(v: any) => (v > 0 ? String(v) : "")}
                   />
                 </Bar>
@@ -481,6 +545,7 @@ export default function ComparisonPanel({
                   stackId="calls"
                   fill="#ef4444"
                   radius={[3, 3, 0, 0]}
+                  cursor="pointer"
                 >
                   <LabelList
                     dataKey="missed"
@@ -488,6 +553,7 @@ export default function ComparisonPanel({
                     fill="#fff"
                     fontSize={9}
                     fontWeight={600}
+                    style={{ pointerEvents: "none" }}
                     formatter={(v: any) => (v > 0 ? String(v) : "")}
                   />
                 </Bar>
@@ -507,6 +573,7 @@ export default function ComparisonPanel({
                         fontSize={10}
                         fontWeight={600}
                         textAnchor="middle"
+                        style={{ pointerEvents: "none" }}
                       >
                         {payload.total}
                       </text>

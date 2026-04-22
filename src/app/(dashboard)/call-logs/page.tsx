@@ -4,10 +4,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle, ChevronDown } from "lucide-react";
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, BellRing, CheckCircle2, XCircle, ChevronDown, Clock } from "lucide-react";
 import { format, addDays, subDays, startOfDay, endOfDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
+import { normalizePhoneNumber } from "@/lib/phone";
 import { DateRange } from "react-day-picker";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Info } from "lucide-react";
@@ -24,6 +25,7 @@ import {
 import ComparisonPanel from "./ComparisonPanel";
 import { CustomRangePopover } from "./CustomRangePopover";
 import { DivideByEmployeeChartJs } from "./DivideByEmployeeChartJs";
+import { formatHourRangeLabel } from "./timeExclusion";
 
 const GraphSkeleton = () => (
   <div className="w-full h-full flex flex-col items-center justify-end pt-8 pb-4 px-2 sm:px-6">
@@ -86,6 +88,7 @@ export default function CallLogsPage() {
   const [hideShortCalls, setHideShortCalls] = useState(true); // default: keep >=10s (except MISSED)
   const [hidePersonalContacts, setHidePersonalContacts] = useState(false);
   const [hideStaffContacts, setHideStaffContacts] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState<string>("ALL"); // intelligence category filter
   const [comparisonPanels, setComparisonPanels] = useState<
     Array<{ id: string; dateFilter: "TODAY" | "YESTERDAY" | "CUSTOM" }>
   >([]);
@@ -94,6 +97,8 @@ export default function CallLogsPage() {
   const [compareXAxisMode, setCompareXAxisMode] = useState<"hour" | "date">("hour");
   const [ignoredGraphEmployees, setIgnoredGraphEmployees] = useState<string[]>([]);
   const [graphExclusionEmployeesOpen, setGraphExclusionEmployeesOpen] = useState(false);
+  const [excludedGraphHours, setExcludedGraphHours] = useState<number[]>([]);
+  const [graphExclusionHoursOpen, setGraphExclusionHoursOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(true);
   const [fcmWakeState, setFcmWakeState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [fcmWakeMsg, setFcmWakeMsg] = useState("");
@@ -102,6 +107,23 @@ export default function CallLogsPage() {
   const latestFetchKeyRef = useRef<string>("");
   const fetchedTagPhonesRef = useRef<Set<string>>(new Set());
   const fetchedIntelligencePairsRef = useRef<Set<string>>(new Set());
+  const [graphFilter, setGraphFilter] = useState<
+    | null
+    | {
+        xMode: "hour";
+        hour: number;
+        callType?: "INCOMING" | "OUTGOING" | "MISSED";
+        employee?: string;
+        range?: { startTs: number; endTs: number };
+      }
+    | {
+        xMode: "date";
+        dateTs: number;
+        callType?: "INCOMING" | "OUTGOING" | "MISSED";
+        employee?: string;
+        range?: { startTs: number; endTs: number };
+      }
+  >(null);
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 640px)");
@@ -182,6 +204,13 @@ export default function CallLogsPage() {
         logsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 80);
     }
+  };
+
+  const scrollToRecords = () => {
+    if (!logsRef.current) return;
+    setTimeout(() => {
+      logsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   };
 
   const applyCustomRange = useCallback((range: DateRange | undefined) => {
@@ -270,6 +299,39 @@ export default function CallLogsPage() {
     }
   };
 
+  const invalidateCacheAndRefetch = useCallback(() => {
+    logsCacheRef.current.clear();
+    latestFetchKeyRef.current = "";
+    // allow the existing loading UI to show while we pull fresh data
+    setIsLoading(true);
+    void fetchLogs();
+  }, [fetchLogs]);
+
+  // Cross-page / same-tab invalidation: when employees or logs change elsewhere,
+  // trigger a fresh fetch so new employees appear without manual reload.
+  useEffect(() => {
+    const onCustom = () => invalidateCacheAndRefetch();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "app:invalidateEmployees" || e.key === "app:invalidateCallLogs") {
+        invalidateCacheAndRefetch();
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") invalidateCacheAndRefetch();
+    };
+
+    window.addEventListener("app:invalidateEmployees", onCustom as EventListener);
+    window.addEventListener("app:invalidateCallLogs", onCustom as EventListener);
+    window.addEventListener("storage", onStorage);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("app:invalidateEmployees", onCustom as EventListener);
+      window.removeEventListener("app:invalidateCallLogs", onCustom as EventListener);
+      window.removeEventListener("storage", onStorage);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [invalidateCacheAndRefetch]);
+
   const fetchTags = async (logsToProcess: any[]) => {
     const uniquePhones = [...new Set(logsToProcess.map((log) => log.phoneNumber))];
     const uncachedPhones = uniquePhones.filter((phone) => !fetchedTagPhonesRef.current.has(phone));
@@ -296,11 +358,13 @@ export default function CallLogsPage() {
   };
 
   const fetchIntelligenceTags = async (logsToProcess: any[]) => {
+    const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
     const pairs = Array.from(
       new Map(
         logsToProcess.map((log) => {
           const emp = log.employeeName || log.driverId?.userId?.name || "Unknown";
-          return [`${log.phoneNumber}|${emp}`, { phoneNumber: log.phoneNumber, employeeName: emp }];
+          const normalized = last10(normalizePhoneNumber(String(log.phoneNumber ?? ""))) || last10(String(log.phoneNumber ?? ""));
+          return [`${normalized}|${emp}`, { phoneNumber: normalized, employeeName: emp }];
         })
       ).values()
     );
@@ -348,6 +412,7 @@ export default function CallLogsPage() {
   }, [employeeNames]);
 
   const ignoredEmployeeSet = useMemo(() => new Set(ignoredGraphEmployees), [ignoredGraphEmployees]);
+  const excludedHourSet = useMemo(() => new Set(excludedGraphHours), [excludedGraphHours]);
 
   useEffect(() => {
     setIgnoredGraphEmployees((prev) => prev.filter((n) => employeeNames.includes(n)));
@@ -356,17 +421,44 @@ export default function CallLogsPage() {
   const getEmployeeName = (log: any) =>
     log.employeeName || log.driverId?.userId?.name || "Unknown";
 
+  const getEmployeeDepartment = (log: any) =>
+    log.driverId?.userId?.departmentId?.name || log.employeeDepartment?.departmentName || "";
+
   const rawFilteredLogs = useMemo(() => {
+    const q = String(searchQuery ?? "").trim();
+    const qLower = q.toLowerCase();
+    const qDigits = q.replace(/\D/g, "");
+    const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
     return logs.filter((log) => {
+      const phoneRaw = String(log.phoneNumber ?? "");
+      const phoneNorm = last10(normalizePhoneNumber(phoneRaw)) || last10(phoneRaw);
+      const emp = getEmployeeName(log);
+      const intelKey = `${phoneNorm}|${emp}`;
+      const intel = intelligenceTags[intelKey];
+      const tagNames = (tags[phoneRaw] ?? []).map((t: any) => String(t?.name ?? ""));
+
       const matchesSearch =
-        searchQuery === "" || log.phoneNumber.includes(searchQuery);
+        q === "" ||
+        // Number search: allow +91/91, spaces, and partial digits (e.g. last 4-10).
+        (qDigits.length > 0 && phoneNorm.includes(qDigits)) ||
+        // Text search fallback: match visible labels (case-insensitive).
+        (qDigits.length === 0 &&
+          [
+            String(log.contactName ?? ""),
+            String(intel?.contactName ?? ""),
+            String(intel?.category ?? ""),
+            ...tagNames,
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(qLower));
       const matchesEmployee =
         selectedEmployee === "ALL" || getEmployeeName(log) === selectedEmployee;
       const durationSec = Number(log.duration) || 0;
       const keepByDuration = !hideShortCalls || log.callType === "MISSED" || durationSec >= 10;
       return matchesSearch && matchesEmployee && keepByDuration;
     });
-  }, [logs, searchQuery, selectedEmployee, hideShortCalls]);
+  }, [logs, searchQuery, selectedEmployee, hideShortCalls, intelligenceTags, tags]);
 
   // Deduplicate logs introduced by an old Android app bug
   const dedupedFilteredLogs = useMemo(() => {
@@ -426,10 +518,24 @@ export default function CallLogsPage() {
     });
   }, [dedupedFilteredLogs, hidePersonalContacts, hideStaffContacts, intelligenceTags]);
 
-  const graphDisplayLogs = useMemo(
-    () => filteredLogs.filter((log) => !ignoredEmployeeSet.has(getEmployeeName(log))),
-    [filteredLogs, ignoredEmployeeSet]
-  );
+  const categoryFilteredLogs = useMemo(() => {
+    if (categoryFilter === "ALL") return filteredLogs;
+    return filteredLogs.filter((log) => {
+      const key = `${log.phoneNumber}|${getEmployeeName(log)}`;
+      return intelligenceTags[key]?.category === categoryFilter;
+    });
+  }, [filteredLogs, categoryFilter, intelligenceTags]);
+
+  const graphDisplayLogs = useMemo(() => {
+    return categoryFilteredLogs.filter((log) => {
+      if (ignoredEmployeeSet.has(getEmployeeName(log))) return false;
+      if (excludedHourSet.size === 0) return true;
+      if (!log.timestamp) return true;
+      const d = new Date(log.timestamp);
+      if (isNaN(d.getTime())) return true;
+      return !excludedHourSet.has(d.getHours());
+    });
+  }, [categoryFilteredLogs, ignoredEmployeeSet, excludedHourSet]);
 
   useEffect(() => {
     if (dedupedFilteredLogs.length > 0) {
@@ -442,6 +548,15 @@ export default function CallLogsPage() {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${m}m ${s}s`;
+  };
+
+  const formatMinutesOrHours = (seconds: number) => {
+    const totalMinutes = Math.round((Number(seconds) || 0) / 60);
+    if (totalMinutes <= 0) return "0m";
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    if (h <= 0) return `${totalMinutes}m`;
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
   };
 
   const CallTypeBadge = ({ callType, className }: { callType: string; className?: string }) => {
@@ -483,6 +598,14 @@ export default function CallLogsPage() {
     Other: "bg-slate-500/15 text-slate-300 border-slate-500/30",
   };
 
+  const categoryOptions = useMemo(() => {
+    // Put common filters first (matches your request: personal/staff/new client + all categories available)
+    const pinned = ["personal", "staff", "New Client", "Existing Client"];
+    const all = Object.keys(CATEGORY_COLORS);
+    const rest = all.filter((c) => !pinned.includes(c)).sort((a, b) => a.localeCompare(b));
+    return ["ALL", ...pinned, ...rest];
+  }, []);
+
   const IdentifiedTag = ({
     log,
     getEmployeeName,
@@ -492,7 +615,9 @@ export default function CallLogsPage() {
     getEmployeeName: (log: any) => string;
     intelligenceTags: Record<string, { category?: string; contactName?: string }>;
   }) => {
-    const key = `${log.phoneNumber}|${getEmployeeName(log)}`;
+    const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
+    const normalized = last10(normalizePhoneNumber(String(log.phoneNumber ?? ""))) || last10(String(log.phoneNumber ?? ""));
+    const key = `${normalized}|${getEmployeeName(log)}`;
     const tag = intelligenceTags[key];
     if (!tag) return <span className="text-slate-500 text-xs">—</span>;
     return (
@@ -620,12 +745,68 @@ export default function CallLogsPage() {
       else if (log.callType === "MISSED") missed += 1;
     }
     return {
-      total: filteredLogs.length,
+      total: graphDisplayLogs.length,
       incoming,
       outgoing,
       missed,
     };
   }, [graphDisplayLogs]);
+
+  const callDurationStats = useMemo(() => {
+    let incomingSec = 0;
+    let outgoingSec = 0;
+    let totalSec = 0;
+    for (const log of graphDisplayLogs) {
+      const d = Number(log.duration) || 0;
+      totalSec += d;
+      if (log.callType === "INCOMING") incomingSec += d;
+      else if (log.callType === "OUTGOING") outgoingSec += d;
+    }
+    return { totalSec, incomingSec, outgoingSec };
+  }, [graphDisplayLogs]);
+
+  const applyGraphFilter = useCallback(
+    (next: NonNullable<typeof graphFilter>) => {
+      setGraphFilter(next);
+      scrollToRecords();
+    },
+    []
+  );
+
+  const applyGraphFilterWithDateRange = useCallback(
+    (
+      next: NonNullable<typeof graphFilter>,
+      range?: { start: Date; end: Date }
+    ) => {
+      if (!range) return applyGraphFilter(next);
+      const startTs = range.start.getTime();
+      const endTs = range.end.getTime();
+      if (!Number.isFinite(startTs) || !Number.isFinite(endTs)) return applyGraphFilter(next);
+      applyGraphFilter({ ...(next as any), range: { startTs, endTs } });
+    },
+    [applyGraphFilter]
+  );
+
+  const resetGraphFilter = useCallback(() => {
+    setGraphFilter(null);
+  }, []);
+
+  const tableLogs = useMemo(() => {
+    if (!graphFilter) return categoryFilteredLogs;
+    return categoryFilteredLogs.filter((log) => {
+      if (!log.timestamp) return false;
+      const t = new Date(log.timestamp);
+      if (isNaN(t.getTime())) return false;
+      if (graphFilter.range) {
+        const ts = t.getTime();
+        if (ts < graphFilter.range.startTs || ts > graphFilter.range.endTs) return false;
+      }
+      if (graphFilter.employee && getEmployeeName(log) !== graphFilter.employee) return false;
+      if (graphFilter.callType && log.callType !== graphFilter.callType) return false;
+      if (graphFilter.xMode === "hour") return t.getHours() === graphFilter.hour;
+      return startOfDay(t).getTime() === graphFilter.dateTs;
+    });
+  }, [categoryFilteredLogs, graphFilter]);
 
   const compareGraphEmployees = useMemo(
     () => selectedCompareEmployees.filter((e) => !ignoredEmployeeSet.has(e)),
@@ -680,6 +861,16 @@ export default function CallLogsPage() {
       const t = new Date(log.timestamp).getTime();
       return t >= start.getTime() && t <= end.getTime();
     });
+
+    if (excludedHourSet.size > 0) {
+      list = list.filter((log) => {
+        if (!log.timestamp) return true;
+        const d = new Date(log.timestamp);
+        if (isNaN(d.getTime())) return true;
+        return !excludedHourSet.has(d.getHours());
+      });
+    }
+
     const unique: any[] = [];
     const sorted = [...list].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     sorted.forEach((log) => {
@@ -696,7 +887,7 @@ export default function CallLogsPage() {
       if (!isDup) unique.push(log);
     });
     return unique;
-  }, [logs, compareGraphEmployees, chartDateRange, typeFilter]);
+  }, [logs, compareGraphEmployees, chartDateRange, typeFilter, excludedHourSet]);
 
   // Single-graph: grouped bars (one bar per employee per slot), each bar stacked by incoming/outgoing/missed. By hour.
   const singleGraphChartDataByHour = useMemo(() => {
@@ -797,11 +988,16 @@ export default function CallLogsPage() {
     const nameLine = truncateNameForBarWidth(emp, w);
     const initials = getInitials(emp);
 
+    // Keep labels visible even when a stack reaches the top of the plot area.
+    // Recharts clips anything rendered above the chart's inner viewport.
+    const safeNameY = Math.max(12, yTop - 20);
+    const safeInitialsY = safeNameY + 14;
+
     return (
       <g>
         <text
           x={cx}
-          y={yTop - 20}
+          y={safeNameY}
           textAnchor="middle"
           dominantBaseline="alphabetic"
           fill="#cbd5e1"
@@ -817,7 +1013,7 @@ export default function CallLogsPage() {
         </text>
         <text
           x={cx}
-          y={yTop - 6}
+          y={safeInitialsY}
           textAnchor="middle"
           dominantBaseline="alphabetic"
           fill="#ffffff"
@@ -911,6 +1107,73 @@ export default function CallLogsPage() {
     );
   };
 
+  const graphTimeExclusionSection = (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setGraphExclusionHoursOpen((v) => !v)}
+          aria-expanded={graphExclusionHoursOpen}
+          className="flex items-center gap-2 min-w-0 rounded-md text-left hover:bg-slate-800/60 -ml-1 pl-1 pr-2 py-1 transition-colors"
+        >
+          <Clock className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+          <span className="text-xs font-medium text-slate-300">Exclude time from graph</span>
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 text-slate-500 shrink-0 transition-transform duration-200",
+              graphExclusionHoursOpen && "rotate-180"
+            )}
+            aria-hidden
+          />
+          {excludedGraphHours.length > 0 && (
+            <span className="text-[11px] text-amber-400/90 shrink-0">
+              · {excludedGraphHours.length} excluded
+            </span>
+          )}
+        </button>
+        {excludedGraphHours.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setExcludedGraphHours([]);
+              setGraphExclusionHoursOpen(false);
+            }}
+            className="text-[11px] font-medium text-indigo-400 hover:text-indigo-300 shrink-0"
+          >
+            Clear time exclusion
+          </button>
+        )}
+      </div>
+
+      {graphExclusionHoursOpen && (
+        <div className="flex flex-wrap gap-1.5 pt-0.5">
+          {Array.from({ length: 24 }, (_, hour) => {
+            const excluded = excludedHourSet.has(hour);
+            return (
+              <button
+                key={`hour-${hour}`}
+                type="button"
+                onClick={() =>
+                  setExcludedGraphHours((prev) =>
+                    excluded ? prev.filter((h) => h !== hour) : [...prev, hour].sort((a, b) => a - b)
+                  )
+                }
+                className={cn(
+                  "px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors",
+                  excluded
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-200/90 line-through decoration-amber-200/50"
+                    : "border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700"
+                )}
+              >
+                {formatHourRangeLabel(hour)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
   const graphExclusionSection =
     employeeNames.length > 0 ? (
       <div className="space-y-2">
@@ -981,7 +1244,7 @@ export default function CallLogsPage() {
         <span className="text-slate-600">|</span>
         <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1">
           <span className="font-medium text-slate-300">Showing:</span>
-          <span className="text-slate-100 font-semibold">{filteredLogs.length}</span>
+          <span className="text-slate-100 font-semibold">{categoryFilteredLogs.length}</span>
         </span>
 
         {/* FCM Wake-Up button */}
@@ -1179,6 +1442,48 @@ export default function CallLogsPage() {
               />
             </div>
           </div>
+
+          {/* Intelligence category filter */}
+          <div className="mt-3 pt-3 border-t border-slate-800/70">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-medium text-slate-400">Category</span>
+              {categoryFilter !== "ALL" && (
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter("ALL")}
+                  className="text-[11px] font-medium text-indigo-400 hover:text-indigo-300"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+              {categoryOptions.map((cat) => {
+                const active = categoryFilter === cat;
+                const isAll = cat === "ALL";
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setCategoryFilter(cat)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap border transition-colors",
+                      active
+                        ? isAll
+                          ? "bg-indigo-600 text-white border-indigo-500"
+                          : "bg-slate-950 text-slate-100 border-slate-600"
+                        : isAll
+                          ? "bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700"
+                          : "bg-slate-900/40 text-slate-300 border-slate-800 hover:bg-slate-800/70"
+                    )}
+                    title={isAll ? "Show all categories" : `Show only: ${cat}`}
+                  >
+                    {isAll ? "All" : cat}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1193,6 +1498,9 @@ export default function CallLogsPage() {
                 {selectedEmployee === "ALL" ? "All employees" : selectedEmployee}
                 {ignoredGraphEmployees.length > 0 && (
                   <span className="text-amber-400/90"> · {ignoredGraphEmployees.length} excluded from chart</span>
+                )}{" "}
+                {excludedGraphHours.length > 0 && (
+                  <span className="text-amber-400/90"> · {excludedGraphHours.length} hour(s) excluded</span>
                 )}{" "}
                 ·{" "}
                 {divideByEmployee
@@ -1233,40 +1541,103 @@ export default function CallLogsPage() {
               </button>
             </div>
           </div>
-          {graphExclusionSection && <div className="mb-4">{graphExclusionSection}</div>}
+          <div className="mb-4 space-y-3">
+            {graphTimeExclusionSection}
+            {graphExclusionSection}
+          </div>
           <div
             className={cn(
               "mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] leading-none",
-              isLoading && filteredLogs.length > 0 && "opacity-60"
+              isLoading && categoryFilteredLogs.length > 0 && "opacity-60"
             )}
           >
             <span className="whitespace-nowrap">
               <span className="text-indigo-400/90">Total calls</span>{" "}
               <span className="tabular-nums font-medium text-indigo-200">
-                {isLoading && filteredLogs.length === 0 ? "—" : callTypeStats.total}
+                {isLoading && categoryFilteredLogs.length === 0 ? "—" : callTypeStats.total}
               </span>
             </span>
             <span className="whitespace-nowrap">
               <span className="text-emerald-500/90">Incoming</span>{" "}
               <span className="tabular-nums font-medium text-emerald-400">
-                {isLoading && filteredLogs.length === 0 ? "—" : callTypeStats.incoming}
+                {isLoading && categoryFilteredLogs.length === 0 ? "—" : callTypeStats.incoming}
               </span>
             </span>
             <span className="whitespace-nowrap">
               <span className="text-blue-400/90">Outgoing</span>{" "}
               <span className="tabular-nums font-medium text-blue-300">
-                {isLoading && filteredLogs.length === 0 ? "—" : callTypeStats.outgoing}
+                {isLoading && categoryFilteredLogs.length === 0 ? "—" : callTypeStats.outgoing}
               </span>
             </span>
             <span className="whitespace-nowrap">
               <span className="text-red-400/90">Missed</span>{" "}
               <span className="tabular-nums font-medium text-red-300">
-                {isLoading && filteredLogs.length === 0 ? "—" : callTypeStats.missed}
+                {isLoading && categoryFilteredLogs.length === 0 ? "—" : callTypeStats.missed}
               </span>
             </span>
           </div>
+          <div
+            className={cn(
+              "mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] leading-none",
+              isLoading && categoryFilteredLogs.length > 0 && "opacity-60"
+            )}
+          >
+            <span className="whitespace-nowrap">
+              <span className="text-slate-400">Total duration</span>{" "}
+              <span className="tabular-nums font-medium text-slate-200">
+                {isLoading && categoryFilteredLogs.length === 0 ? "—" : formatMinutesOrHours(callDurationStats.totalSec)}
+              </span>
+            </span>
+            <span className="whitespace-nowrap">
+              <span className="text-emerald-500/90">Incoming</span>{" "}
+              <span className="tabular-nums font-medium text-emerald-400">
+                {isLoading && categoryFilteredLogs.length === 0
+                  ? "—"
+                  : formatMinutesOrHours(callDurationStats.incomingSec)}
+              </span>
+            </span>
+            <span className="whitespace-nowrap">
+              <span className="text-blue-400/90">Outgoing</span>{" "}
+              <span className="tabular-nums font-medium text-blue-300">
+                {isLoading && categoryFilteredLogs.length === 0
+                  ? "—"
+                  : formatMinutesOrHours(callDurationStats.outgoingSec)}
+              </span>
+            </span>
+          </div>
+          {graphFilter && (
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="text-slate-500 font-medium">Graph filter:</span>
+              <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-slate-300">
+                {graphFilter.employee ? (
+                  <span className="text-slate-200 font-semibold">{graphFilter.employee}</span>
+                ) : (
+                  <span className="text-slate-200 font-semibold">All employees</span>
+                )}
+                <span className="text-slate-600">·</span>
+                <span className="text-slate-300">
+                  {graphFilter.xMode === "hour"
+                    ? timeBuckets.find((b) => b.hour === graphFilter.hour)?.label ?? `Hour ${graphFilter.hour}`
+                    : format(new Date(graphFilter.dateTs), "d MMM")}
+                </span>
+                {graphFilter.callType && (
+                  <>
+                    <span className="text-slate-600">·</span>
+                    <span className="font-semibold text-slate-200">{graphFilter.callType}</span>
+                  </>
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={resetGraphFilter}
+                className="text-[11px] font-medium text-indigo-400 hover:text-indigo-300"
+              >
+                Reset
+              </button>
+            </div>
+          )}
           <div className="relative h-72 sm:h-96 min-h-[320px]">
-            {isLoading && filteredLogs.length > 0 && (
+            {isLoading && categoryFilteredLogs.length > 0 && (
               <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg bg-slate-950/45 backdrop-blur-[1px]">
                 <div className="flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900 px-3 py-1.5 shadow-lg">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />
@@ -1274,9 +1645,9 @@ export default function CallLogsPage() {
                 </div>
               </div>
             )}
-            {isLoading && filteredLogs.length === 0 ? (
+            {isLoading && categoryFilteredLogs.length === 0 ? (
               <GraphSkeleton />
-            ) : graphDisplayLogs.length === 0 && filteredLogs.length > 0 ? (
+            ) : graphDisplayLogs.length === 0 && categoryFilteredLogs.length > 0 ? (
               <div className="flex h-full items-center justify-center text-xs text-slate-500 px-4 text-center">
                 Everyone is excluded from the chart. Clear exclusions above or pick different employees.
               </div>
@@ -1284,7 +1655,13 @@ export default function CallLogsPage() {
               <div className="w-full h-full">
                 <div className="h-full w-full">
                   {divideByEmployee ? (
-                    <DivideByEmployeeChartJs rows={chartDataDividedByEmployee} employees={divideGraphEmployees} />
+                    <DivideByEmployeeChartJs
+                      rows={chartDataDividedByEmployee}
+                      employees={divideGraphEmployees}
+                      onSelect={({ hour, employee, callType }) => {
+                        applyGraphFilter({ xMode: "hour", hour, employee, callType });
+                      }}
+                    />
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart
@@ -1292,6 +1669,18 @@ export default function CallLogsPage() {
                         margin={{ top: 28, right: 0, left: -20, bottom: 88 }}
                         barCategoryGap="6%"
                         barGap={0}
+                        onClick={(e: any) => {
+                          const ap = e?.activePayload;
+                          const hit = Array.isArray(ap) && ap.length > 0 ? ap[0] : null;
+                          const payload = hit?.payload;
+                          const dk = String(hit?.dataKey ?? "");
+                          if (!payload) return;
+                          const hour = Number(payload.hour);
+                          if (!Number.isFinite(hour)) return;
+                          const callType =
+                            dk === "incoming" ? "INCOMING" : dk === "outgoing" ? "OUTGOING" : dk === "missed" ? "MISSED" : undefined;
+                          applyGraphFilter({ xMode: "hour", hour, callType });
+                        }}
                       >
                         <XAxis
                           dataKey="timeRange"
@@ -1309,33 +1698,79 @@ export default function CallLogsPage() {
                           tickCount={10}
                         />
                         <RechartsTooltip content={<AnalyticsTooltip />} />
-                        <Bar dataKey="incoming" stackId="calls" fill="#22c55e" isAnimationActive={false}>
+                        <Bar
+                          dataKey="incoming"
+                          stackId="calls"
+                          fill="#22c55e"
+                          isAnimationActive={false}
+                          cursor="pointer"
+                          onClick={(data: any) => {
+                            if (!data?.payload) return;
+                            applyGraphFilter({
+                              xMode: "hour",
+                              hour: Number(data.payload.hour),
+                              callType: "INCOMING",
+                            });
+                          }}
+                        >
                           <LabelList
                             dataKey="incoming"
                             position="center"
                             fill="#fff"
                             fontSize={10}
                             fontWeight={600}
+                            style={{ pointerEvents: "none" }}
                             formatter={(value: any) => (value > 0 ? String(value) : "")}
                           />
                         </Bar>
-                        <Bar dataKey="outgoing" stackId="calls" fill="#3b82f6" isAnimationActive={false}>
+                        <Bar
+                          dataKey="outgoing"
+                          stackId="calls"
+                          fill="#3b82f6"
+                          isAnimationActive={false}
+                          cursor="pointer"
+                          onClick={(data: any) => {
+                            if (!data?.payload) return;
+                            applyGraphFilter({
+                              xMode: "hour",
+                              hour: Number(data.payload.hour),
+                              callType: "OUTGOING",
+                            });
+                          }}
+                        >
                           <LabelList
                             dataKey="outgoing"
                             position="center"
                             fill="#fff"
                             fontSize={10}
                             fontWeight={600}
+                            style={{ pointerEvents: "none" }}
                             formatter={(value: any) => (value > 0 ? String(value) : "")}
                           />
                         </Bar>
-                        <Bar dataKey="missed" stackId="calls" fill="#ef4444" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+                        <Bar
+                          dataKey="missed"
+                          stackId="calls"
+                          fill="#ef4444"
+                          radius={[4, 4, 0, 0]}
+                          isAnimationActive={false}
+                          cursor="pointer"
+                          onClick={(data: any) => {
+                            if (!data?.payload) return;
+                            applyGraphFilter({
+                              xMode: "hour",
+                              hour: Number(data.payload.hour),
+                              callType: "MISSED",
+                            });
+                          }}
+                        >
                           <LabelList
                             dataKey="missed"
                             position="center"
                             fill="#fff"
                             fontSize={10}
                             fontWeight={600}
+                            style={{ pointerEvents: "none" }}
                             formatter={(value: any) => (value > 0 ? String(value) : "")}
                           />
                         </Bar>
@@ -1349,7 +1784,15 @@ export default function CallLogsPage() {
                             const { cx, cy, payload } = props;
                             if (!payload || payload.total === 0) return null;
                             return (
-                              <text x={cx} y={cy - 8} fill="#e2e8f0" fontSize={11} fontWeight={600} textAnchor="middle">
+                              <text
+                                x={cx}
+                                y={cy - 8}
+                                fill="#e2e8f0"
+                                fontSize={11}
+                                fontWeight={600}
+                                textAnchor="middle"
+                                style={{ pointerEvents: "none" }}
+                              >
                                 {payload.total}
                               </text>
                             );
@@ -1481,7 +1924,10 @@ export default function CallLogsPage() {
                   </div>
                 </div>
 
-                {graphExclusionSection && <div>{graphExclusionSection}</div>}
+                <div className="space-y-3">
+                  {graphTimeExclusionSection}
+                  {graphExclusionSection}
+                </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs font-medium text-slate-400">X-axis</span>
@@ -1534,9 +1980,31 @@ export default function CallLogsPage() {
                           <ResponsiveContainer width="100%" height="100%" minHeight={300}>
                       <ComposedChart
                         data={singleGraphChartData}
-                        margin={{ top: 58, right: 16, left: 8, bottom: 88 }}
-                        barCategoryGap="18%"
+                        margin={{ top: 84, right: 16, left: 8, bottom: 88 }}
+                        // Remove gaps between employee stacks within the same time bucket.
+                        barCategoryGap={0}
                         barGap={0}
+                        style={{ overflow: "visible" }}
+                        onClick={(e: any) => {
+                          const ap = e?.activePayload;
+                          const hit = Array.isArray(ap) && ap.length > 0 ? ap[0] : null;
+                          const payload = hit?.payload;
+                          const dk = String(hit?.dataKey ?? "");
+                          if (!payload || !dk) return;
+                          const m = dk.match(/^(.*)_(incoming|outgoing|missed)$/);
+                          if (!m) return;
+                          const employee = m[1];
+                          const callType = m[2] === "incoming" ? "INCOMING" : m[2] === "outgoing" ? "OUTGOING" : "MISSED";
+                          if (compareXAxisMode === "date") {
+                            const dateTs = Number(payload.dateTs);
+                            if (!Number.isFinite(dateTs)) return;
+                            applyGraphFilter({ xMode: "date", dateTs, employee, callType });
+                          } else {
+                            const hour = Number(payload.hour);
+                            if (!Number.isFinite(hour)) return;
+                            applyGraphFilter({ xMode: "hour", hour, employee, callType });
+                          }
+                        }}
                       >
                         <XAxis
                           dataKey="timeRange"
@@ -1565,6 +2033,25 @@ export default function CallLogsPage() {
                               stackId={emp}
                               fill={COMPARE_CALL_TYPE_COLORS.incoming}
                               radius={[0, 0, 0, 0]}
+                              cursor="pointer"
+                              onClick={(data: any) => {
+                                if (!data?.payload) return;
+                                if (compareXAxisMode === "date") {
+                                  applyGraphFilter({
+                                    xMode: "date",
+                                    dateTs: Number(data.payload.dateTs),
+                                    employee: emp,
+                                    callType: "INCOMING",
+                                  });
+                                } else {
+                                  applyGraphFilter({
+                                    xMode: "hour",
+                                    hour: Number(data.payload.hour),
+                                    employee: emp,
+                                    callType: "INCOMING",
+                                  });
+                                }
+                              }}
                             >
                               <LabelList
                                 dataKey={`${emp}_incoming`}
@@ -1572,6 +2059,7 @@ export default function CallLogsPage() {
                                 fill="#fff"
                                 fontSize={9}
                                 fontWeight={600}
+                                style={{ pointerEvents: "none" }}
                                 formatter={(value: any) => (value > 0 ? String(value) : "")}
                               />
                             </Bar>,
@@ -1582,6 +2070,25 @@ export default function CallLogsPage() {
                               stackId={emp}
                               fill={COMPARE_CALL_TYPE_COLORS.outgoing}
                               radius={[0, 0, 0, 0]}
+                              cursor="pointer"
+                              onClick={(data: any) => {
+                                if (!data?.payload) return;
+                                if (compareXAxisMode === "date") {
+                                  applyGraphFilter({
+                                    xMode: "date",
+                                    dateTs: Number(data.payload.dateTs),
+                                    employee: emp,
+                                    callType: "OUTGOING",
+                                  });
+                                } else {
+                                  applyGraphFilter({
+                                    xMode: "hour",
+                                    hour: Number(data.payload.hour),
+                                    employee: emp,
+                                    callType: "OUTGOING",
+                                  });
+                                }
+                              }}
                             >
                               <LabelList
                                 dataKey={`${emp}_outgoing`}
@@ -1589,6 +2096,7 @@ export default function CallLogsPage() {
                                 fill="#fff"
                                 fontSize={9}
                                 fontWeight={600}
+                                style={{ pointerEvents: "none" }}
                                 formatter={(value: any) => (value > 0 ? String(value) : "")}
                               />
                             </Bar>,
@@ -1600,6 +2108,25 @@ export default function CallLogsPage() {
                               fill={COMPARE_CALL_TYPE_COLORS.missed}
                               radius={[4, 4, 0, 0]}
                               label={makeEmployeeStackTopBarLabel(emp)}
+                              cursor="pointer"
+                              onClick={(data: any) => {
+                                if (!data?.payload) return;
+                                if (compareXAxisMode === "date") {
+                                  applyGraphFilter({
+                                    xMode: "date",
+                                    dateTs: Number(data.payload.dateTs),
+                                    employee: emp,
+                                    callType: "MISSED",
+                                  });
+                                } else {
+                                  applyGraphFilter({
+                                    xMode: "hour",
+                                    hour: Number(data.payload.hour),
+                                    employee: emp,
+                                    callType: "MISSED",
+                                  });
+                                }
+                              }}
                             >
                               <LabelList
                                 dataKey={`${emp}_missed`}
@@ -1607,6 +2134,7 @@ export default function CallLogsPage() {
                                 fill="#fff"
                                 fontSize={9}
                                 fontWeight={600}
+                                style={{ pointerEvents: "none" }}
                                 formatter={(value: any) => (value > 0 ? String(value) : "")}
                               />
                             </Bar>,
@@ -1664,8 +2192,15 @@ export default function CallLogsPage() {
                   key={panel.id}
                   panelIndex={index}
                   initialDateFilter={panel.dateFilter}
+                  excludedGraphHours={excludedGraphHours}
                   onRemove={() => removeComparisonPanel(panel.id)}
                   canRemove={comparisonPanels.length > 2}
+                  onSelectFromPanel={({ start, end, hour, callType, employee }) => {
+                    applyGraphFilterWithDateRange(
+                      { xMode: "hour", hour, callType, employee },
+                      { start, end }
+                    );
+                  }}
                 />
               ))}
             </div>
@@ -1691,7 +2226,7 @@ export default function CallLogsPage() {
 
         {/* Desktop Table */}
         <div className="hidden sm:block relative min-h-[200px]">
-          {isLoading && filteredLogs.length > 0 && (
+          {isLoading && tableLogs.length > 0 && (
             <div className="absolute inset-0 z-20 bg-slate-950/40 backdrop-blur-[1px] flex items-center justify-center rounded-b-xl border-t border-slate-800 transition-all duration-300">
               <div className="flex bg-slate-900 border border-slate-700 px-4 py-2.5 rounded-full shadow-xl items-center gap-3">
                 <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
@@ -1712,23 +2247,32 @@ export default function CallLogsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading && filteredLogs.length === 0 ? (
+              {isLoading && tableLogs.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="h-32 text-center border-b-0">
                     <Loader2 className="h-6 w-6 animate-spin mx-auto text-indigo-500" />
                   </TableCell>
                 </TableRow>
-              ) : filteredLogs.length === 0 ? (
+              ) : tableLogs.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={7} className="h-24 text-center text-slate-500 border-b-0">
                     No call logs found matching your filters.
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredLogs.map((log: any) => (
-                  <TableRow key={log._id} className="border-slate-800 hover:bg-slate-800/50">
+                tableLogs.map((log: any) => (
+                  <TableRow
+                    key={log._id}
+                    data-scroll-anchor-id={`${String(log._id ?? "")}|${String(log.timestamp ?? "")}|${String(log.phoneNumber ?? "")}`}
+                    className="border-slate-800 hover:bg-slate-800/50"
+                  >
                     <TableCell className="font-medium text-slate-300">
-                      {getEmployeeName(log)}
+                      <div className="flex flex-col gap-0.5">
+                        <span>{getEmployeeName(log)}</span>
+                        {getEmployeeDepartment(log) ? (
+                          <span className="text-[11px] text-slate-500">{getEmployeeDepartment(log)}</span>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell className="text-slate-400">
                       <div className="flex flex-col gap-1 items-start">
@@ -1777,7 +2321,7 @@ export default function CallLogsPage() {
 
         {/* Mobile Card List */}
         <div className="block sm:hidden relative min-h-[200px]">
-          {isLoading && filteredLogs.length > 0 && (
+          {isLoading && tableLogs.length > 0 && (
             <div className="absolute inset-0 z-20 bg-slate-950/40 backdrop-blur-[1px] flex items-center justify-center rounded-b-xl border-t border-slate-800 transition-all duration-300">
               <div className="flex bg-slate-900 border border-slate-700 px-4 py-2.5 rounded-full shadow-xl items-center gap-3">
                 <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
@@ -1785,15 +2329,15 @@ export default function CallLogsPage() {
               </div>
             </div>
           )}
-          {isLoading && filteredLogs.length === 0 ? (
+          {isLoading && tableLogs.length === 0 ? (
             <div className="flex items-center justify-center h-48 border-t border-slate-800">
               <Loader2 className="h-6 w-6 animate-spin text-indigo-500" />
             </div>
-          ) : filteredLogs.length === 0 ? (
+          ) : tableLogs.length === 0 ? (
             <div className="text-center text-slate-500 py-16 text-sm border-t border-slate-800">No call logs found matching your filters.</div>
           ) : (
             <div className="divide-y divide-slate-800/50 border-t border-slate-800/50">
-              {filteredLogs.map((log: any) => {
+              {tableLogs.map((log: any) => {
                 const employee = getEmployeeName(log);
                 const displayContactName = log.contactName && log.contactName !== "Unknown" ? log.contactName : log.phoneNumber;
                 const logTags = tags[log.phoneNumber] || [];
@@ -1818,9 +2362,12 @@ export default function CallLogsPage() {
                   <div key={log._id} className="p-2.5 hover:bg-slate-800/40 transition-colors w-full flex flex-col gap-1 min-h-0">
                     {/* Row 1: Tracked user (full width priority) + call type badge */}
                     <div className="flex items-start justify-between gap-2 min-w-0">
-                      <span className="text-sm font-semibold text-white min-w-0 flex-1 pr-1 leading-snug line-clamp-2 break-words">
-                        {employee}
-                      </span>
+                      <div className="min-w-0 flex-1 pr-1">
+                        <div className="text-sm font-semibold text-white leading-snug line-clamp-2 break-words">{employee}</div>
+                        {getEmployeeDepartment(log) ? (
+                          <div className="text-[11px] text-slate-500 truncate">{getEmployeeDepartment(log)}</div>
+                        ) : null}
+                      </div>
                       <CallTypeBadge callType={log.callType} className="border-0 text-[10px] px-1.5 py-0.5 font-medium shrink-0 self-center" />
                     </div>
                     {/* Row 2: Contact truncates; call type + duration stay visible */}
@@ -1906,9 +2453,9 @@ export default function CallLogsPage() {
         </div>
 
         {/* Footer count */}
-        {!isLoading && filteredLogs.length > 0 && (
+        {!isLoading && tableLogs.length > 0 && (
           <div className="px-4 py-3 border-t border-slate-800 text-xs text-slate-500">
-            Showing <span className="text-slate-300 font-medium">{filteredLogs.length}</span> record{filteredLogs.length !== 1 ? "s" : ""}
+            Showing <span className="text-slate-300 font-medium">{tableLogs.length}</span> record{tableLogs.length !== 1 ? "s" : ""}
             {selectedEmployee !== "ALL" && (
               <> for <span className="text-indigo-400 font-medium">{selectedEmployee}</span></>
             )}

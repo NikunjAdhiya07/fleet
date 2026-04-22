@@ -1,6 +1,14 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
-export type ContactCategory = 'personal' | 'staff' | 'Existing Client' | 'New Client' | 'courier';
+export type ContactCategory =
+  | 'personal'
+  | 'staff'
+  | 'Existing Client'
+  | 'New Client'
+  | 'courier'
+  | 'Family'
+  | 'Colleague'
+  | 'Other';
 
 export interface IIdentifiedContact extends Document {
   phoneNumber: string;
@@ -26,7 +34,17 @@ const IdentifiedContactSchema = new Schema(
     contactName: { type: String },
     category: {
       type: String,
-      enum: ['personal', 'staff', 'Existing Client', 'New Client', 'courier'],
+      // Keep as string but restrict to known UI categories used across the dashboard.
+      enum: [
+        'personal',
+        'staff',
+        'Existing Client',
+        'New Client',
+        'courier',
+        'Family',
+        'Colleague',
+        'Other',
+      ],
     },
     savedInPhone: { type: Boolean, default: false },
     remindLater: { type: Boolean, default: false },

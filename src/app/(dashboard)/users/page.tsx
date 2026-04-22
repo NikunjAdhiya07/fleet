@@ -13,13 +13,14 @@ import { Label } from "@/components/ui/label";
 
 export default function UsersPage() {
   const [users, setUsers] = useState<any[]>([]);
+  const [departments, setDepartments] = useState<Array<{ _id: string; name: string }>>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [formData, setFormData] = useState({ name: "", email: "", username: "", password: "", role: "driver" });
+  const [formData, setFormData] = useState({ name: "", email: "", username: "", password: "", role: "driver", departmentId: "" });
   const [isCreating, setIsCreating] = useState(false);
 
   // Edit / Delete states
   const [editingUser, setEditingUser] = useState<any | null>(null);
-  const [editFormData, setEditFormData] = useState({ name: "", email: "", username: "", password: "", role: "" });
+  const [editFormData, setEditFormData] = useState({ name: "", email: "", username: "", password: "", role: "", departmentId: "" });
   const [isUpdating, setIsUpdating] = useState(false);
   
   const [deletingUser, setDeletingUser] = useState<any | null>(null);
@@ -34,6 +35,7 @@ export default function UsersPage() {
 
   useEffect(() => {
     fetchUsers();
+    fetchDepartments();
   }, []);
 
   const fetchUsers = async () => {
@@ -50,6 +52,17 @@ export default function UsersPage() {
     }
   };
 
+  const fetchDepartments = async () => {
+    try {
+      const res = await fetch("/api/departments", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setDepartments(Array.isArray(data) ? data : []);
+    } catch (e) {
+      // ignore
+    }
+  };
+
   const createUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsCreating(true);
@@ -61,7 +74,7 @@ export default function UsersPage() {
       });
       if (res.ok) {
         fetchUsers();
-        setFormData({ name: "", email: "", username: "", password: "", role: "driver" });
+        setFormData({ name: "", email: "", username: "", password: "", role: "driver", departmentId: "" });
       } else {
         const data = await res.json();
         alert(data.error || "Failed to create user");
@@ -80,7 +93,8 @@ export default function UsersPage() {
       email: user.email, 
       username: user.username || "", 
       password: "", 
-      role: user.role 
+      role: user.role,
+      departmentId: user.departmentId || user.department?._id || "",
     });
   };
 
@@ -222,6 +236,27 @@ export default function UsersPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                  Department <span className="text-slate-500 opacity-60">(Opt)</span>
+                </label>
+                <Select
+                  value={formData.departmentId || "__none__"}
+                  onValueChange={(v) => setFormData({ ...formData, departmentId: v === "__none__" ? "" : v })}
+                >
+                  <SelectTrigger className="h-11 bg-slate-950/50 border-slate-700/80 text-white focus:ring-fuchsia-500/50">
+                    <SelectValue placeholder="Select a department" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-slate-800">
+                    <SelectItem value="__none__">No department</SelectItem>
+                    {departments.map((d) => (
+                      <SelectItem key={d._id} value={d._id}>
+                        {d.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <Button type="submit" disabled={isCreating} className="w-full h-12 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold shadow-lg shadow-indigo-500/25 transition-all">
                 {isCreating ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <UserPlus className="mr-2 h-5 w-5" />}
                 Add Employee
@@ -239,6 +274,7 @@ export default function UsersPage() {
                   <TableHead className="text-slate-400 font-semibold tracking-wider text-xs uppercase py-4">Name</TableHead>
                   <TableHead className="text-slate-400 font-semibold tracking-wider text-xs uppercase py-4">Auth Details</TableHead>
                   <TableHead className="text-slate-400 font-semibold tracking-wider text-xs uppercase py-4">Role</TableHead>
+                  <TableHead className="text-slate-400 font-semibold tracking-wider text-xs uppercase py-4">Department</TableHead>
                   <TableHead className="text-slate-400 font-semibold tracking-wider text-xs uppercase py-4">Wallet Balance</TableHead>
                   <TableHead className="text-slate-400 font-semibold tracking-wider text-xs uppercase text-right py-4">Actions</TableHead>
                 </TableRow>
@@ -246,7 +282,7 @@ export default function UsersPage() {
               <TableBody>
                 {isLoading ? (
                   <TableRow className="hover:bg-transparent">
-                    <TableCell colSpan={5} className="h-48 text-center">
+                    <TableCell colSpan={6} className="h-48 text-center">
                       <Loader2 className="h-8 w-8 animate-spin mx-auto text-indigo-500 mb-2" />
                       <p className="text-sm text-slate-500">Loading your team...</p>
                     </TableCell>
@@ -268,6 +304,9 @@ export default function UsersPage() {
                       }`}>
                         {user.role}
                       </Badge>
+                    </TableCell>
+                    <TableCell className="py-4">
+                      <span className="text-slate-300">{user.department?.name || "—"}</span>
                     </TableCell>
                     <TableCell className="py-4">
                       {user.role === "driver" ? (
@@ -450,6 +489,25 @@ export default function UsersPage() {
                    <SelectItem value="driver">Employee (Driver)</SelectItem>
                  </SelectContent>
                </Select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-300">Department</label>
+              <Select
+                value={editFormData.departmentId || "__none__"}
+                onValueChange={(v) => setEditFormData({ ...editFormData, departmentId: v === "__none__" ? "" : v })}
+              >
+                <SelectTrigger className="bg-slate-950 border-slate-700 text-white">
+                  <SelectValue placeholder="Select a department" />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-900 border-slate-800">
+                  <SelectItem value="__none__">No department</SelectItem>
+                  {departments.map((d) => (
+                    <SelectItem key={d._id} value={d._id}>
+                      {d.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <DialogFooter className="pt-4">
               <Button type="button" variant="ghost" onClick={() => setEditingUser(null)} className="hover:bg-slate-800 text-slate-300">Cancel</Button>

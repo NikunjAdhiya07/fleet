@@ -171,9 +171,10 @@ type Props = {
   rows: DivideByEmployeeRow[];
   employees: string[];
   minWidthPx?: number;
+  onSelect?: (sel: { hour: number; employee: string; callType: "INCOMING" | "OUTGOING" | "MISSED" }) => void;
 };
 
-export function DivideByEmployeeChartJs({ rows, employees, minWidthPx }: Props) {
+export function DivideByEmployeeChartJs({ rows, employees, minWidthPx, onSelect }: Props) {
   const topLabelPlugin = useMemo(() => makeEmployeeTopLabelsPlugin(employees, rows), [employees, rows]);
 
   const data = useMemo(() => {
@@ -252,6 +253,28 @@ export function DivideByEmployeeChartJs({ rows, employees, minWidthPx }: Props) 
           },
           datalabels: { clip: false },
         },
+        onClick: (_event, elements, chart) => {
+          if (!onSelect) return;
+          const el = elements?.[0];
+          if (!el) return;
+          const dataIndex = Number((el as any).index);
+          const datasetIndex = Number((el as any).datasetIndex);
+          if (!Number.isFinite(dataIndex) || !Number.isFinite(datasetIndex)) return;
+          const row = rows[dataIndex];
+          const hour = Number(row?.hour);
+          if (!Number.isFinite(hour)) return;
+
+          const ds = (chart.data.datasets?.[datasetIndex] ?? {}) as {
+            stack?: string;
+            segment?: Seg;
+          };
+          const employee = String(ds.stack ?? "");
+          const seg = ds.segment;
+          const callType =
+            seg === "incoming" ? "INCOMING" : seg === "outgoing" ? "OUTGOING" : seg === "missed" ? "MISSED" : null;
+          if (!employee || !callType) return;
+          onSelect({ hour, employee, callType });
+        },
         datasets: {
           bar: {
             categoryPercentage: 0.9,
@@ -279,7 +302,7 @@ export function DivideByEmployeeChartJs({ rows, employees, minWidthPx }: Props) 
           },
         },
       }) satisfies import("chart.js").ChartOptions<"bar">,
-    [rows]
+    [rows, onSelect]
   );
 
   return (
