@@ -74,6 +74,7 @@ export default function CallLogsPage() {
   const [intelligenceTags, setIntelligenceTags] = useState<Record<string, { category?: string; contactName?: string }>>({});
   const [totalCount, setTotalCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [dateFilter, setDateFilter] = useState<"ALL" | "TODAY" | "TOMORROW" | "YESTERDAY" | "CUSTOM">("TODAY");
@@ -225,11 +226,7 @@ export default function CallLogsPage() {
     setDateFilter("TODAY");
   }, []);
 
-  useEffect(() => {
-    fetchLogs();
-  }, [typeFilter, dateFilter, dateRange]);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     const getRange = () => {
       let start: Date | null = null;
       let end: Date | null = null;
@@ -271,6 +268,7 @@ export default function CallLogsPage() {
     }
 
     setIsLoading(true);
+    setFetchError(null);
     try {
       const url = new URL("/api/call-logs", window.location.origin);
       if (typeFilter !== "ALL") url.searchParams.append("callType", typeFilter);
@@ -286,29 +284,42 @@ export default function CallLogsPage() {
           : { logs: data.logs || [], totalCount: data.totalCount || 0 };
         logsCacheRef.current.set(cacheKey, nextPayload);
         if (latestFetchKeyRef.current !== cacheKey) return;
-        // Handle both older array returns and newer object returns
         setLogs(nextPayload.logs);
         setTotalCount(nextPayload.totalCount);
+        setFetchError(null);
       } else {
         const err = await res.json().catch(() => ({}));
         console.error("Call logs fetch failed:", res.status, err);
         if (latestFetchKeyRef.current !== cacheKey) return;
         setLogs([]);
         setTotalCount(0);
+        setFetchError(
+          res.status === 401
+            ? "Not authorised — your session may have expired. Please refresh the page."
+            : `Failed to load call logs (${res.status}): ${(err as any)?.error ?? "Server error"}`
+        );
       }
     } catch (error) {
       console.error("Failed to fetch call logs:", error);
+      if (latestFetchKeyRef.current === cacheKey) {
+        setLogs([]);
+        setTotalCount(0);
+        setFetchError("Network error — could not reach the server. Check your connection and try again.");
+      }
     } finally {
       if (latestFetchKeyRef.current === cacheKey) {
         setIsLoading(false);
       }
     }
-  };
+  }, [typeFilter, dateFilter, dateRange]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
   const invalidateCacheAndRefetch = useCallback(() => {
     logsCacheRef.current.clear();
     latestFetchKeyRef.current = "";
-    // allow the existing loading UI to show while we pull fresh data
     setIsLoading(true);
     void fetchLogs();
   }, [fetchLogs]);
@@ -322,19 +333,14 @@ export default function CallLogsPage() {
         invalidateCacheAndRefetch();
       }
     };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") invalidateCacheAndRefetch();
-    };
 
     window.addEventListener("app:invalidateEmployees", onCustom as EventListener);
     window.addEventListener("app:invalidateCallLogs", onCustom as EventListener);
     window.addEventListener("storage", onStorage);
-    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("app:invalidateEmployees", onCustom as EventListener);
       window.removeEventListener("app:invalidateCallLogs", onCustom as EventListener);
       window.removeEventListener("storage", onStorage);
-      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [invalidateCacheAndRefetch]);
 
@@ -1492,6 +1498,20 @@ export default function CallLogsPage() {
           </div>
         </div>
       </div>
+
+      {/* Fetch error banner */}
+      {fetchError && !isLoading && (
+        <div className="flex items-center gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          <XCircle className="h-4 w-4 shrink-0 text-rose-400" />
+          <span>{fetchError}</span>
+          <button
+            onClick={() => { setFetchError(null); invalidateCacheAndRefetch(); }}
+            className="ml-auto shrink-0 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-xs text-rose-300 hover:bg-rose-500/20"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Call Activity Graph */}
       {!comparisonMode && (

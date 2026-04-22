@@ -11,6 +11,19 @@ function normalizeCallType(raw: unknown): string {
   return "UNKNOWN";
 }
 
+function normalizeTimestamp(raw: unknown): Date {
+  if (raw === null || raw === undefined || raw === "") return new Date();
+  const n = Number(raw);
+  if (Number.isFinite(n)) {
+    // Android clients sometimes send unix seconds instead of milliseconds.
+    const ms = n < 1e12 ? n * 1000 : n;
+    const d = new Date(ms);
+    if (!isNaN(d.getTime())) return d;
+  }
+  const d = new Date(String(raw));
+  return isNaN(d.getTime()) ? new Date() : d;
+}
+
 // POST — called by the Android app (authenticated via X-API-Key)
 export async function POST(req: Request) {
   try {
@@ -42,7 +55,7 @@ export async function POST(req: Request) {
       contactName: contactName || "Unknown",
       callType: normalizeCallType(callType),
       duration: duration || 0,
-      timestamp: timestamp ? new Date(Number(timestamp)) : new Date(),
+      timestamp: normalizeTimestamp(timestamp),
       deviceId,
       employeeName: employeeName || "Unknown",
       syncedAt: new Date(),

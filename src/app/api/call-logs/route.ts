@@ -6,6 +6,11 @@ import CallLog from "@/models/CallLog";
 import DeviceCallLog from "@/models/DeviceCallLog";
 import EmployeeTelegram from "@/models/EmployeeTelegram";
 import EmployeeDepartment from "@/models/EmployeeDepartment";
+// Imported for their side-effect of registering the mongoose model,
+// which the populate() chain below relies on.
+import "@/models/Driver";
+import "@/models/User";
+import "@/models/Department";
 import mongoose from "mongoose";
 
 export async function GET(req: Request) {
@@ -25,53 +30,80 @@ export async function GET(req: Request) {
     const endDate = searchParams.get("endDate");
 
     await connectToDatabase();
-    
-    const query: any = {};
+
+    // Build the query as a flat set of independent clauses. We combine them
+    // with $and at the end so multiple $or clauses (company scoping + date
+    // range fallback) never overwrite each other.
+    const clauses: Record<string, unknown>[] = [];
+
     if (!isSuperAdmin) {
       const companyObjectId = new mongoose.Types.ObjectId(session!.user.companyId!);
-      const employeeMappings = await EmployeeTelegram.find()
+
+      // Scope the Telegram employee lookup to this company so we don't leak
+      // names from other tenants into the query.
+      const employeeMappings = await EmployeeTelegram.find({
+        $or: [
+          { companyId: companyObjectId },
+          { companyId: { $exists: false } },
+          { companyId: null },
+        ],
+      })
         .select("employeeName")
         .lean();
-      const employeeNames = employeeMappings
-        .map((m: any) => m.employeeName)
-        .filter((n: any) => typeof n === "string" && n.trim().length > 0);
+      const employeeNames = Array.from(
+        new Set(
+          (employeeMappings as Array<{ employeeName?: unknown }>)
+            .map((m) => (typeof m.employeeName === "string" ? m.employeeName.trim() : ""))
+            .filter((n) => n.length > 0)
+        )
+      );
 
       // Match logs that either:
       // 1. Have the admin's companyId set explicitly
       // 2. Were never stamped with a companyId (common for DeviceCallLog entries)
-      // 3. Belong to an employee in the Telegram setup (any)
-      query.$or = [
-        { companyId: companyObjectId },
-        { companyId: { $exists: false } },
-        { companyId: null },
-        ...(employeeNames.length > 0 ? [{ employeeName: { $in: employeeNames } }] : []),
-      ];
+      // 3. Belong to an employee in this company's Telegram setup
+      clauses.push({
+        $or: [
+          { companyId: companyObjectId },
+          { companyId: { $exists: false } },
+          { companyId: null },
+          ...(employeeNames.length > 0 ? [{ employeeName: { $in: employeeNames } }] : []),
+        ],
+      });
     }
 
     if (driverId) {
-      query.driverId = new mongoose.Types.ObjectId(driverId);
+      clauses.push({ driverId: new mongoose.Types.ObjectId(driverId) });
     }
     if (callType && callType !== "ALL") {
-      query.callType = callType;
+      clauses.push({ callType });
     }
     if (search) {
-      query.phoneNumber = { $regex: search, $options: "i" };
+      clauses.push({ phoneNumber: { $regex: search, $options: "i" } });
     }
     if (startDate || endDate) {
-      query.timestamp = {};
-      if (startDate) query.timestamp.$gte = new Date(startDate);
-      if (endDate) query.timestamp.$lte = new Date(endDate);
+      const range: Record<string, Date> = {};
+      if (startDate) range.$gte = new Date(startDate);
+      if (endDate) range.$lte = new Date(endDate);
+
+      // Match on `timestamp` first, then fall back to `syncedAt` / `createdAt`
+      // for older rows whose device-supplied timestamp was wrong (e.g. unix
+      // seconds saved as ms, or unset entirely).
+      clauses.push({
+        $or: [
+          { timestamp: range },
+          { syncedAt: range },
+          { createdAt: range },
+        ],
+      });
     }
 
-    // Get the total unfiltered count first from both collections
-    const [totalMainCount, totalDeviceCount] = await Promise.all([
-      CallLog.countDocuments(query),
-      DeviceCallLog.countDocuments(query)
-    ]);
-    const totalCount = totalMainCount + totalDeviceCount;
+    const query: Record<string, unknown> =
+      clauses.length === 0 ? {} : clauses.length === 1 ? clauses[0] : { $and: clauses };
 
-    // Fetch from both collections
-    const [mainLogs, deviceLogs] = await Promise.all([
+    const [totalMainCount, totalDeviceCount, mainLogs, deviceLogs] = await Promise.all([
+      CallLog.countDocuments(query),
+      DeviceCallLog.countDocuments(query),
       CallLog.find(query)
         .populate({
           path: "driverId",
@@ -85,11 +117,12 @@ export async function GET(req: Request) {
               select: "name",
               model: "Department",
             },
-          }
+          },
         })
         .lean(),
-      DeviceCallLog.find(query).lean()
+      DeviceCallLog.find(query).lean(),
     ]);
+    const totalCount = totalMainCount + totalDeviceCount;
 
     const merged = [...mainLogs, ...deviceLogs];
 
@@ -105,8 +138,8 @@ export async function GET(req: Request) {
 
     let mappingByName = new Map<string, { departmentName: string; departmentId: string }>();
     if (employeeNames.length > 0) {
-      const mappingQuery: any = { employeeName: { $in: employeeNames } };
-      if (session!.user.role !== "super_admin") {
+      const mappingQuery: Record<string, unknown> = { employeeName: { $in: employeeNames } };
+      if (!isSuperAdmin) {
         mappingQuery.companyId = new mongoose.Types.ObjectId(session!.user.companyId!);
       }
       const mappings = await EmployeeDepartment.find(mappingQuery)
@@ -133,12 +166,16 @@ export async function GET(req: Request) {
         }
         return l;
       })
-      .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      .sort(
+        (a: any, b: any) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
 
     return NextResponse.json({ logs, totalCount });
   } catch (error) {
     console.error("Failed to fetch call logs:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Internal Server Error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
