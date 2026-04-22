@@ -6,7 +6,8 @@ export const runtime = "nodejs";
 export async function GET() {
   try {
     const buf = await exportCallTrackerWorkbookBuffer();
-    return new NextResponse(buf, {
+    // NextResponse expects a web BodyInit; convert Node Buffer -> Uint8Array
+    return new NextResponse(new Uint8Array(buf), {
       status: 200,
       headers: {
         "Content-Type":
