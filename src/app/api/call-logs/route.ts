@@ -11,7 +11,9 @@ import mongoose from "mongoose";
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.companyId && session?.user?.role !== "super_admin") {
+    const role = String(session?.user?.role ?? "").toLowerCase();
+    const isSuperAdmin = role === "super_admin";
+    if (!session?.user?.companyId && !isSuperAdmin) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -25,7 +27,7 @@ export async function GET(req: Request) {
     await connectToDatabase();
     
     const query: any = {};
-    if (session!.user.role !== "super_admin") {
+    if (!isSuperAdmin) {
       const companyObjectId = new mongoose.Types.ObjectId(session!.user.companyId!);
       const employeeMappings = await EmployeeTelegram.find()
         .select("employeeName")
@@ -143,9 +145,15 @@ export async function GET(req: Request) {
 export async function PUT(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.companyId && session?.user?.role !== "super_admin") {
+    if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const role = String(session.user.role ?? "").toLowerCase();
+    const isSuperAdmin = role === "super_admin";
+    if (!session?.user?.companyId && !isSuperAdmin) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const user = session.user;
 
     const data = await req.json();
     const { _id, employeeName, contactName, phoneNumber, callType, duration, timestamp } = data;
@@ -158,8 +166,8 @@ export async function PUT(req: Request) {
     
     // Admins can only edit logs in their company
     const query: any = { _id: new mongoose.Types.ObjectId(_id) };
-    if (session.user.role !== "super_admin") {
-      query.companyId = new mongoose.Types.ObjectId(session.user.companyId!);
+    if (!isSuperAdmin) {
+      query.companyId = new mongoose.Types.ObjectId(user.companyId!);
     }
 
     const updateData: any = {};
@@ -190,9 +198,15 @@ export async function PUT(req: Request) {
 export async function DELETE(req: Request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.companyId && session?.user?.role !== "super_admin") {
+    if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+    const role = String(session.user.role ?? "").toLowerCase();
+    const isSuperAdmin = role === "super_admin";
+    if (!session?.user?.companyId && !isSuperAdmin) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const user = session.user;
 
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
@@ -204,8 +218,8 @@ export async function DELETE(req: Request) {
     await connectToDatabase();
     
     const query: any = { _id: new mongoose.Types.ObjectId(id) };
-    if (session.user.role !== "super_admin") {
-      query.companyId = new mongoose.Types.ObjectId(session.user.companyId!);
+    if (!isSuperAdmin) {
+      query.companyId = new mongoose.Types.ObjectId(user.companyId!);
     }
 
     const result = await CallLog.deleteOne(query);

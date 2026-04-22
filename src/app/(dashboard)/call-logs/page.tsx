@@ -289,6 +289,12 @@ export default function CallLogsPage() {
         // Handle both older array returns and newer object returns
         setLogs(nextPayload.logs);
         setTotalCount(nextPayload.totalCount);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        console.error("Call logs fetch failed:", res.status, err);
+        if (latestFetchKeyRef.current !== cacheKey) return;
+        setLogs([]);
+        setTotalCount(0);
       }
     } catch (error) {
       console.error("Failed to fetch call logs:", error);
