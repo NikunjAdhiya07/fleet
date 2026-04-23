@@ -76,7 +76,8 @@ export async function GET(req: Request) {
       clauses.push({ driverId: new mongoose.Types.ObjectId(driverId) });
     }
     if (callType && callType !== "ALL") {
-      clauses.push({ callType });
+      const types = callType.split(",");
+      clauses.push({ callType: { $in: types } });
     }
     if (search) {
       clauses.push({ phoneNumber: { $regex: search, $options: "i" } });

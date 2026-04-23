@@ -318,6 +318,40 @@ export default async function AnalyticsPage({
     { $limit: 10 },
   ]);
 
+  // ── 5. Unidentified Clients — contacts with no name called 5+ times ──
+  const unidentifiedClientsData = await CallLog.aggregate([
+    {
+      $match: {
+        ...dateQuery,
+        $or: [
+          { contactName: { $exists: false } },
+          { contactName: null },
+          { contactName: "" },
+        ],
+      },
+    },
+    {
+      $group: {
+        _id: "$phoneNumber",
+        totalCalls: { $sum: 1 },
+        timestamps: { $push: "$timestamp" },
+        employeeNames: { $addToSet: "$employeeName" },
+        callTypes: { $push: "$callType" },
+      },
+    },
+    { $match: { totalCalls: { $gte: 5 } } },
+    { $sort: { totalCalls: -1 } },
+    { $limit: 50 },
+  ]);
+
+  const unidentifiedClients = unidentifiedClientsData.map((c) => ({
+    phoneNumber: c._id as string,
+    totalCalls: c.totalCalls as number,
+    timestamps: (c.timestamps as Date[]).map((t) => new Date(t).toISOString()).sort(),
+    employeeNames: (c.employeeNames as string[]).filter(Boolean),
+    callTypes: c.callTypes as string[],
+  }));
+
   const repeatCallers = repeatCallersData.map((caller) => ({
     phoneNumber: caller._id as string,
     contactName: caller.contactName as string,
@@ -413,6 +447,7 @@ export default async function AnalyticsPage({
         callTypes={callTypes}
         bestCallTimes={bestCallTimes}
         repeatCallers={repeatCallers}
+        unidentifiedClients={unidentifiedClients}
         currentRange={range}
         missedResolutionComputed={!!(startDate && endDate)}
       />
