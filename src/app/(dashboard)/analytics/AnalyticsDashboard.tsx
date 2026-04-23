@@ -13,10 +13,11 @@ import {
   CartesianGrid,
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
-  Legend
+  Legend,
+  Sector
 } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { PhoneCall, Clock, CheckCircle2, AlertCircle, PhoneIncoming, PhoneOutgoing, PhoneMissed, Phone, Flame, Trophy, LineChart, User, Calendar as CalendarIcon } from "lucide-react";
+import { PhoneCall, Clock, CheckCircle2, AlertCircle, PhoneIncoming, PhoneOutgoing, PhoneMissed, Phone, Flame, Trophy, LineChart, User, Calendar as CalendarIcon, UserX, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -56,6 +57,14 @@ interface RepeatCaller {
   totalDuration: number;
 }
 
+interface UnidentifiedClient {
+  phoneNumber: string;
+  totalCalls: number;
+  timestamps: string[];
+  employeeNames: string[];
+  callTypes: string[];
+}
+
 interface AllEmployee {
   driverId: string;
   employeeName: string;
@@ -67,6 +76,7 @@ interface AnalyticsDashboardProps {
   callTypes: CallType[];
   bestCallTimes: BestCallTime[];
   repeatCallers: RepeatCaller[];
+  unidentifiedClients?: UnidentifiedClient[];
   currentRange: string;
   missedResolutionComputed?: boolean;
 }
@@ -100,11 +110,14 @@ export default function AnalyticsDashboard({
   callTypes,
   bestCallTimes,
   repeatCallers,
+  unidentifiedClients = [],
   currentRange,
   missedResolutionComputed = false,
 }: AnalyticsDashboardProps) {
   
   const [selectedEmployee, setSelectedEmployee] = useState<string>("ALL");
+  const [activeCallTypeFilters, setActiveCallTypeFilters] = useState<string[]>([]);
+  const [showUnidentifiedModal, setShowUnidentifiedModal] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -203,56 +216,129 @@ export default function AnalyticsDashboard({
     return employeeStats.filter(e => e.employeeName === selectedEmployee);
   }, [employeeStats, selectedEmployee]);
 
+  // Filter Unidentified Clients based on pie chart call-type selection and selected employee
+  const filteredUnidentifiedClients = useMemo(() => {
+    return unidentifiedClients.filter((client) => {
+      // 1. Employee Filter
+      if (selectedEmployee !== "ALL" && !client.employeeNames.includes(selectedEmployee)) {
+        return false;
+      }
+      
+      // 2. Call Type Filter
+      if (activeCallTypeFilters.length > 0) {
+        // Must contain AT LEAST ONE of the active filters
+        const hasMatchingCallType = activeCallTypeFilters.some(filter => client.callTypes.includes(filter));
+        if (!hasMatchingCallType) return false;
+      }
+      return true;
+    });
+  }, [unidentifiedClients, selectedEmployee, activeCallTypeFilters]);
+
   // Marketing Insights Logic (Using unfiltered data usually best for insight panel unless explicitly stated, but we will leave it as is for now)
   const bestConvertingTime = [...bestCallTimes].sort((a, b) => b.avgDuration - a.avgDuration)[0];
   const outgoingCalls = callTypes.find(c => c.name === 'OUTGOING')?.value || 0;
   const incomingCalls = callTypes.find(c => c.name === 'INCOMING')?.value || 0;
   const repeatCallersCount = repeatCallers.length;
+  const unidentifiedCount = filteredUnidentifiedClients.length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-h-screen bg-[#080b14]">
 
       {/* ── FILTERS ── */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row gap-6">
-        {/* Employee Filter */}
-        <div className="flex-1">
-          <div className="flex items-center gap-2 mb-3">
-            <User className="h-4 w-4 text-slate-300" />
-            <span className="text-sm font-bold text-slate-200">Filter Dashboard by Employee</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => setSelectedEmployee("ALL")}
-            className={cn(
-              "px-4 py-2 rounded-full text-xs font-semibold transition-all duration-200",
-              selectedEmployee === "ALL"
-                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/25 scale-105"
-                : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white"
-            )}
-          >
-            All Employees
-          </button>
-          {employeeNames.map((name) => (
-            <button
-              key={name}
-              onClick={() => setSelectedEmployee(name)}
-              className={cn(
-                "px-4 py-2 rounded-full text-xs font-semibold transition-all duration-200 flex items-center gap-2",
-                selectedEmployee === name
-                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/25 scale-105"
-                  : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white"
-              )}
-            >
-              <span
+        
+        {/* Left Side: Employee and Call Type Filters */}
+        <div className="flex-1 flex flex-col gap-6">
+          
+          {/* Employee Filter */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <User className="h-4 w-4 text-slate-300" />
+              <span className="text-sm font-bold text-slate-200">Filter Dashboard by Employee</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setSelectedEmployee("ALL")}
                 className={cn(
-                  "w-2 h-2 rounded-full",
-                  selectedEmployee === name ? "bg-white" : "bg-slate-600"
+                  "px-4 py-2 rounded-full text-xs font-semibold transition-all duration-200",
+                  selectedEmployee === "ALL"
+                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/25 scale-105"
+                    : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white"
                 )}
-              />
-              {name}
-            </button>
-          ))}
-        </div>
+              >
+                All Employees
+              </button>
+              {employeeNames.map((name) => (
+                <button
+                  key={name}
+                  onClick={() => setSelectedEmployee(name)}
+                  className={cn(
+                    "px-4 py-2 rounded-full text-xs font-semibold transition-all duration-200 flex items-center gap-2",
+                    selectedEmployee === name
+                      ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/25 scale-105"
+                      : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "w-2 h-2 rounded-full",
+                      selectedEmployee === name ? "bg-white" : "bg-slate-600"
+                    )}
+                  />
+                  {name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Call Type Interactive Filter */}
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <Phone className="h-4 w-4 text-slate-300" />
+              <span className="text-sm font-bold text-slate-200">Call Type (Click together to view)</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setActiveCallTypeFilters([])}
+                className={cn(
+                  "px-4 py-2 rounded-full text-xs font-semibold transition-all duration-200",
+                  activeCallTypeFilters.length === 0
+                    ? "bg-slate-200 text-slate-900 shadow-lg scale-105"
+                    : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white"
+                )}
+              >
+                All Types
+              </button>
+              {["INCOMING", "OUTGOING", "MISSED"].map(type => {
+                const isActive = activeCallTypeFilters.includes(type);
+                const Icon = type === "INCOMING" ? PhoneIncoming : type === "OUTGOING" ? PhoneOutgoing : PhoneMissed;
+                const activeColor = type === "INCOMING" ? "bg-blue-500 shadow-blue-500/25" : type === "OUTGOING" ? "bg-emerald-500 shadow-emerald-500/25" : "bg-rose-500 shadow-rose-500/25";
+                
+                return (
+                  <button
+                    key={type}
+                    onClick={() => {
+                      if (isActive) {
+                        setActiveCallTypeFilters(prev => prev.filter(t => t !== type));
+                      } else {
+                        setActiveCallTypeFilters(prev => [...prev, type]);
+                      }
+                    }}
+                    className={cn(
+                      "px-4 py-2 rounded-full text-xs font-semibold transition-all duration-200 flex items-center gap-1.5",
+                      isActive
+                        ? `${activeColor} text-white shadow-lg scale-105`
+                        : "bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white"
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {type.charAt(0) + type.slice(1).toLowerCase()}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          
         </div>
 
         {/* Date Range Filter */}
@@ -369,7 +455,7 @@ export default function AnalyticsDashboard({
       </div>
       
       {/* ── RECOMMENDED TOP CARDS (Globals) ── */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
         <Card className="bg-slate-900 border-slate-800">
           <CardHeader className="p-4 pb-2">
             <CardTitle className="text-xs font-bold text-slate-300">Total Calls ({rangeLabel})</CardTitle>
@@ -441,6 +527,33 @@ export default function AnalyticsDashboard({
             </div>
           </CardContent>
         </Card>
+
+        {/* Unidentified Client — clickable */}
+        <button
+          onClick={() => setShowUnidentifiedModal(true)}
+          className="text-left group focus:outline-none"
+          aria-label="View unidentified clients"
+        >
+          <Card className={cn(
+            "border transition-all duration-200 group-hover:shadow-lg group-hover:shadow-orange-500/20 group-hover:border-orange-500/50 group-hover:scale-[1.02]",
+            unidentifiedCount > 0
+              ? "bg-orange-950/30 border-orange-600/40"
+              : "bg-slate-900 border-slate-800"
+          )}>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className={cn("text-xs font-bold", unidentifiedCount > 0 ? "text-orange-300" : "text-slate-300")}>
+                Unidentified Client
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 pt-0">
+              <div className={cn("text-2xl font-bold flex items-center gap-2", unidentifiedCount > 0 ? "text-orange-400" : "text-white")}>
+                <UserX className="h-5 w-5" />
+                {unidentifiedCount}
+              </div>
+              <div className="text-[10px] text-slate-500 mt-1">≥5 calls · tap to view</div>
+            </CardContent>
+          </Card>
+        </button>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -632,18 +745,60 @@ export default function AnalyticsDashboard({
                       outerRadius={80}
                       paddingAngle={5}
                       dataKey="value"
+                      onClick={(data, index) => {
+                        const type = String(data.name || data.value);
+                        if (activeCallTypeFilters.includes(type)) {
+                          setActiveCallTypeFilters(prev => prev.filter(t => t !== type));
+                        } else {
+                          setActiveCallTypeFilters(prev => [...prev, type]);
+                        }
+                      }}
+                      // @ts-ignore
+                      activeIndex={activeCallTypeFilters.length > 0 ? activeCallTypeFilters.map(t => callTypes.findIndex(c => c.name === t)).filter(i => i !== -1) : undefined}
+                      activeShape={(props: any) => {
+                        const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props;
+                        return (
+                          <g>
+                            <Sector
+                              cx={cx}
+                              cy={cy}
+                              innerRadius={innerRadius}
+                              outerRadius={outerRadius + 8}
+                              startAngle={startAngle}
+                              endAngle={endAngle}
+                              fill={fill}
+                            />
+                          </g>
+                        );
+                      }}
+                      className="cursor-pointer outline-none"
                     >
                       {callTypes.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={PIE_COLORS[entry.name as keyof typeof PIE_COLORS] || '#8884d8'} />
+                        <Cell 
+                          key={`cell-${index}`} 
+                          fill={PIE_COLORS[entry.name as keyof typeof PIE_COLORS] || '#8884d8'} 
+                          opacity={activeCallTypeFilters.length > 0 && !activeCallTypeFilters.includes(entry.name) ? 0.3 : 1}
+                          className="transition-all duration-300"
+                        />
                       ))}
                     </Pie>
                     <RechartsTooltip 
                       contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px' }}
                       itemStyle={{ color: '#f8fafc' }}
+                      cursor={{fill: '#1e293b', opacity: 0.4}}
                     />
                     <Legend 
                       verticalAlign="bottom" height={36} 
-                      formatter={(value) => <span className="text-slate-100 font-medium text-sm">{value}</span>}
+                      formatter={(value) => <span className={cn("font-medium text-sm transition-colors", activeCallTypeFilters.includes(value) ? "text-white font-bold" : "text-slate-300")}>{value}</span>}
+                      onClick={(data) => {
+                        const type = String(data.value);
+                        if (activeCallTypeFilters.includes(type)) {
+                          setActiveCallTypeFilters(prev => prev.filter(t => t !== type));
+                        } else {
+                          setActiveCallTypeFilters(prev => [...prev, type]);
+                        }
+                      }}
+                      wrapperStyle={{ cursor: 'pointer' }}
                     />
                   </PieChart>
                 </ResponsiveContainer>
@@ -772,6 +927,106 @@ export default function AnalyticsDashboard({
           
         </div>
       </div>
+
+      {/* ── UNIDENTIFIED CLIENT MODAL ── */}
+      {showUnidentifiedModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[85vh] shadow-2xl shadow-orange-500/10 flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-orange-500/10 rounded-lg">
+                  <UserX className="h-5 w-5 text-orange-400" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-white">Unidentified Clients</h2>
+                  <p className="text-xs text-slate-400 mt-0.5">Contacts with no name who have called 5 or more times</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowUnidentifiedModal(false)}
+                className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-6 bg-[#080b14]">
+              {unidentifiedClients.length === 0 ? (
+                <div className="text-center py-12">
+                  <div className="w-16 h-16 bg-slate-800/50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+                  </div>
+                  <h3 className="text-slate-200 font-semibold mb-1">All Clear!</h3>
+                  <p className="text-slate-400 text-sm">No unidentified clients found matching your current filters.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {unidentifiedClients.map((client, idx) => (
+                    <Card key={idx} className="bg-slate-900 border-slate-800 overflow-hidden hover:border-slate-700 transition-colors">
+                      <div className="p-4 flex flex-col sm:flex-row gap-4">
+                        {/* Client Info */}
+                        <div className="flex-1 flex flex-col justify-between">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-lg font-bold text-white tracking-wider">{client.phoneNumber}</span>
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-800 text-slate-400">
+                                  Unknown
+                                </span>
+                              </div>
+                              <div className="text-xs text-slate-500 flex items-center gap-1.5 flex-wrap">
+                                <User className="h-3 w-3" />
+                                {client.employeeNames.length > 0 ? client.employeeNames.join(", ") : "Unknown Employee"}
+                              </div>
+                            </div>
+                            <div className="flex flex-col items-end">
+                              <div className="text-sm font-medium text-slate-400 mb-1">Total Calls</div>
+                              <div className="px-3 py-1 rounded-full bg-orange-500/10 text-orange-400 font-bold text-lg">
+                                {client.totalCalls}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Divider */}
+                        <div className="hidden sm:block w-px bg-slate-800" />
+
+                        {/* Timestamps */}
+                        <div className="flex-1 min-w-[200px]">
+                          <div className="text-xs font-medium text-slate-400 mb-2 flex items-center gap-1.5">
+                            <Clock className="h-3.5 w-3.5" /> Recent Call Times
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {client.timestamps.slice(-6).map((ts, i) => (
+                              <span key={i} className="px-2 py-1 bg-slate-950 border border-slate-800 rounded text-xs text-slate-300 font-mono">
+                                {format(new Date(ts), "MMM d, h:mm a")}
+                              </span>
+                            ))}
+                            {client.timestamps.length > 6 && (
+                              <span className="px-2 py-1 bg-slate-950 border border-slate-800 rounded text-xs text-slate-500 font-mono italic">
+                                +{client.timestamps.length - 6} more
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-slate-800 bg-slate-900/50 flex justify-end">
+              <Button onClick={() => setShowUnidentifiedModal(false)} variant="secondary" className="bg-slate-800 text-white hover:bg-slate-700 border-0">
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

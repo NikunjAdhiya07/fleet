@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, XCircle, ChevronDown, Clock } from "lucide-react";
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, XCircle, ChevronDown, Clock, CheckCircle2, X } from "lucide-react";
 import { format, addDays, subDays, startOfDay, endOfDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
@@ -60,7 +60,7 @@ export default function CallLogsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState("ALL");
+  const [activeCallTypeFilters, setActiveCallTypeFilters] = useState<Set<string>>(new Set(["ALL"]));
   const [dateFilter, setDateFilter] = useState<"ALL" | "TODAY" | "TOMORROW" | "YESTERDAY" | "CUSTOM">("TODAY");
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const [selectedEmployee, setSelectedEmployee] = useState<string>("ALL");
@@ -87,6 +87,7 @@ export default function CallLogsPage() {
   const [graphExclusionEmployeesOpen, setGraphExclusionEmployeesOpen] = useState(false);
   const [excludedGraphHours, setExcludedGraphHours] = useState<number[]>([]);
   const [graphExclusionHoursOpen, setGraphExclusionHoursOpen] = useState(false);
+  const [showUnidentifiedModal, setShowUnidentifiedModal] = useState(false);
   const [isDesktop, setIsDesktop] = useState(true);
   const logsCacheRef = useRef<Map<string, { logs: any[]; totalCount: number }>>(new Map());
   const latestFetchKeyRef = useRef<string>("");
@@ -214,7 +215,7 @@ export default function CallLogsPage() {
 
     const { start, end } = getRange();
     const cacheKey = JSON.stringify({
-      typeFilter,
+      typeFilters: Array.from(activeCallTypeFilters).sort().join(","),
       dateFilter,
       start: start?.toISOString() ?? null,
       end: end?.toISOString() ?? null,
@@ -233,7 +234,9 @@ export default function CallLogsPage() {
     setFetchError(null);
     try {
       const url = new URL("/api/call-logs", window.location.origin);
-      if (typeFilter !== "ALL") url.searchParams.append("callType", typeFilter);
+      if (!activeCallTypeFilters.has("ALL")) {
+        url.searchParams.append("callType", Array.from(activeCallTypeFilters).join(","));
+      }
 
       if (start) url.searchParams.append("startDate", start.toISOString());
       if (end) url.searchParams.append("endDate", end.toISOString());
@@ -273,7 +276,7 @@ export default function CallLogsPage() {
         setIsLoading(false);
       }
     }
-  }, [typeFilter, dateFilter, dateRange]);
+  }, [activeCallTypeFilters, dateFilter, dateRange]);
 
   useEffect(() => {
     fetchLogs();
@@ -799,6 +802,57 @@ export default function CallLogsPage() {
     return sorted;
   }, [categoryFilteredLogs, intelligenceTags]);
 
+  const unidentifiedClients = useMemo(() => {
+    const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
+    const contactMap = new Map<string, {
+      phoneNumber: string;
+      totalCalls: number;
+      timestamps: string[];
+      employeeNames: Set<string>;
+      callTypes: string[];
+    }>();
+
+    for (const log of categoryFilteredLogs) {
+      const phoneRaw = String(log.phoneNumber ?? "");
+      const phoneNorm = last10(normalizePhoneNumber(phoneRaw)) || last10(phoneRaw);
+      const emp = getEmployeeName(log);
+      const intelK = `${phoneNorm}|${emp}`;
+      const intel = intelligenceTags[intelK];
+      const rawName = intel?.contactName || log.contactName || "";
+      
+      const UNKNOWN_VALUES = new Set(["unknown", "", "null", "undefined"]);
+      const isUnknown = !rawName || UNKNOWN_VALUES.has(rawName.trim().toLowerCase());
+
+      if (isUnknown) {
+        const mapKey = phoneNorm || phoneRaw;
+        const existing = contactMap.get(mapKey);
+        if (existing) {
+          existing.totalCalls += 1;
+          if (log.timestamp) existing.timestamps.push(log.timestamp);
+          existing.employeeNames.add(emp);
+          if (log.callType) existing.callTypes.push(log.callType);
+        } else {
+          contactMap.set(mapKey, {
+            phoneNumber: phoneRaw,
+            totalCalls: 1,
+            timestamps: log.timestamp ? [log.timestamp] : [],
+            employeeNames: new Set([emp]),
+            callTypes: log.callType ? [log.callType] : []
+          });
+        }
+      }
+    }
+    
+    return Array.from(contactMap.values())
+      .filter(c => c.totalCalls >= 5)
+      .map(c => ({
+        ...c,
+        employeeNames: Array.from(c.employeeNames),
+        timestamps: c.timestamps.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
+      }))
+      .sort((a, b) => b.totalCalls - a.totalCalls);
+  }, [categoryFilteredLogs, intelligenceTags]);
+
   const applyGraphFilter = useCallback(
     (next: NonNullable<typeof graphFilter>) => {
       setGraphFilter(next);
@@ -908,8 +962,8 @@ export default function CallLogsPage() {
     if (compareGraphEmployees.length === 0) return [];
     const empSet = new Set(compareGraphEmployees);
     let list = logs.filter((log) => empSet.has(getEmployeeName(log)));
-    if (typeFilter !== "ALL") {
-      list = list.filter((log) => log.callType === typeFilter);
+    if (!activeCallTypeFilters.has("ALL")) {
+      list = list.filter((log) => log.callType && activeCallTypeFilters.has(log.callType));
     }
     const { start, end } = chartDateRange;
     list = list.filter((log) => {
@@ -943,7 +997,7 @@ export default function CallLogsPage() {
       if (!isDup) unique.push(log);
     });
     return unique;
-  }, [logs, compareGraphEmployees, chartDateRange, typeFilter, excludedHourSet]);
+  }, [logs, compareGraphEmployees, chartDateRange, activeCallTypeFilters, excludedHourSet]);
 
   // Single-graph: grouped bars (one bar per employee per slot), each bar stacked by incoming/outgoing/missed. By hour.
   const singleGraphChartDataByHour = useMemo(() => {
@@ -1292,6 +1346,17 @@ export default function CallLogsPage() {
             )}
           </>
         )}
+
+        <span className="text-slate-700 text-xs">|</span>
+        <button 
+          type="button"
+          onClick={() => setShowUnidentifiedModal(true)}
+          className="flex items-center gap-1.5 rounded-md text-left hover:bg-slate-800/60 px-1.5 py-1 transition-colors"
+        >
+          <UserX className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+          <span className="text-xs font-medium text-orange-400">Probable Client</span>
+          {unidentifiedClients.length > 0 && <span className="text-[11px] text-orange-400/90 font-bold">· {unidentifiedClients.length}</span>}
+        </button>
       </div>
       {graphTimeExclusionSection}
       {graphExclusionSection}
@@ -1406,20 +1471,38 @@ export default function CallLogsPage() {
           <div className="flex flex-col sm:flex-row gap-3 sm:justify-between">
             {/* Call Type */}
             <div className="flex gap-2 overflow-x-auto pb-1 sm:pb-0 flex-shrink-0">
-              {["ALL", "INCOMING", "OUTGOING", "MISSED"].map((type) => (
-                <button
-                  key={type}
-                  onClick={() => setTypeFilter(type)}
-                  className={cn(
-                    "px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors",
-                    typeFilter === type
-                      ? "bg-indigo-600 text-white"
-                      : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
-                  )}
-                >
-                  {type}
-                </button>
-              ))}
+              {["ALL", "INCOMING", "OUTGOING", "MISSED"].map((type) => {
+                const isActive = activeCallTypeFilters.has(type);
+                return (
+                  <button
+                    key={type}
+                    onClick={() => {
+                      setActiveCallTypeFilters(prev => {
+                        const next = new Set(prev);
+                        if (type === "ALL") {
+                          return new Set(["ALL"]);
+                        }
+                        next.delete("ALL");
+                        if (next.has(type)) {
+                          next.delete(type);
+                          if (next.size === 0) return new Set(["ALL"]);
+                        } else {
+                          next.add(type);
+                        }
+                        return next;
+                      });
+                    }}
+                    className={cn(
+                      "px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors",
+                      isActive
+                        ? "bg-indigo-600 text-white shadow-lg shadow-indigo-500/20"
+                        : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                    )}
+                  >
+                    {type}
+                  </button>
+                );
+              })}
 
               <button
                 type="button"
@@ -2652,6 +2735,92 @@ export default function CallLogsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── PROBABLE CLIENT MODAL ── */}
+      {showUnidentifiedModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[85vh] shadow-2xl shadow-orange-500/10 flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-orange-500/10 rounded-lg">
+                  <UserX className="h-5 w-5 text-orange-400" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-white">Probable Clients</h2>
+                  <p className="text-xs text-slate-400 mt-0.5">Contacts with no name who have called 5 or more times</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowUnidentifiedModal(false)}
+                className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-0 bg-[#080b14]">
+              {unidentifiedClients.length === 0 ? (
+                <div className="text-center py-12">
+                  <div className="w-16 h-16 bg-slate-800/50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+                  </div>
+                  <h3 className="text-slate-200 font-semibold mb-1">All Clear!</h3>
+                  <p className="text-slate-400 text-sm">No probable clients found matching your current filters.</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader className="bg-slate-900/50 sticky top-0 z-10">
+                    <TableRow className="border-slate-800 hover:bg-transparent">
+                      <TableHead className="text-slate-400 font-semibold h-10">Phone Number</TableHead>
+                      <TableHead className="text-slate-400 font-semibold h-10 text-center">Total Calls</TableHead>
+                      <TableHead className="text-slate-400 font-semibold h-10">Employees</TableHead>
+                      <TableHead className="text-slate-400 font-semibold h-10 text-right">Most Recent Call</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {unidentifiedClients.map((client, idx) => (
+                      <TableRow key={idx} className="border-slate-800/60 hover:bg-slate-800/30 transition-colors">
+                        <TableCell className="font-medium text-slate-200 py-3">
+                          <div className="flex items-center gap-2">
+                            {client.phoneNumber}
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-slate-800 text-slate-500">
+                              Unknown
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-center py-3">
+                          <span className="inline-flex items-center justify-center min-w-[1.5rem] px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400 font-bold text-xs">
+                            {client.totalCalls}
+                          </span>
+                        </TableCell>
+                        <TableCell className="py-3">
+                          <div className="text-xs text-slate-400 truncate max-w-[200px]" title={client.employeeNames.join(", ")}>
+                            {client.employeeNames.length > 0 ? client.employeeNames.join(", ") : "—"}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right py-3">
+                          <span className="text-xs text-slate-300 font-mono">
+                            {client.timestamps.length > 0 ? format(new Date(client.timestamps[0]), "MMM d, h:mm a") : "—"}
+                          </span>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+            
+            {/* Modal Footer */}
+            <div className="px-6 py-3 border-t border-slate-800 bg-slate-900/50 flex justify-end">
+              <Button onClick={() => setShowUnidentifiedModal(false)} variant="secondary" size="sm" className="bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border-0">
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
