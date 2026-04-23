@@ -2,16 +2,21 @@
 
 import { useSession, signOut } from "next-auth/react";
 import { useEffect, useRef, useState } from "react";
-import { LogOut, User, Menu, RefreshCw } from "lucide-react";
+import { LogOut, User, Menu, RefreshCw, BellRing, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "./SidebarContext";
+import { useNavbarCount } from "./NavbarCountContext";
 import { cn } from "@/lib/utils";
 import { usePathname } from "next/navigation";
 
 export function Navbar() {
   const { data: session } = useSession();
   const { toggle } = useSidebar();
+  const { showingCount } = useNavbarCount();
   const [fcmWakePending, setFcmWakePending] = useState(false);
+  const [fcmWakeState, setFcmWakeState] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [fcmWakePingAll, setFcmWakePingAll] = useState(false);
+  const [fcmWakeMsg, setFcmWakeMsg] = useState<string | null>(null);
   const pathname = usePathname();
   const restoreAttemptRef = useRef(0);
 
@@ -179,6 +184,27 @@ export function Navbar() {
     window.location.reload();
   };
 
+  const triggerFcmWake = async () => {
+    setFcmWakeState("loading");
+    setFcmWakeMsg(null);
+    try {
+      const params = fcmWakePingAll ? "all=1" : "hours=12";
+      const res = await fetch(`/api/fcm-wake?${params}`, { method: "POST", credentials: "same-origin" });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setFcmWakeState("success");
+        setFcmWakeMsg(json.message ?? "Sent");
+      } else {
+        setFcmWakeState("error");
+        setFcmWakeMsg(json.error ?? "Failed");
+      }
+    } catch {
+      setFcmWakeState("error");
+      setFcmWakeMsg("Network error");
+    }
+    setTimeout(() => { setFcmWakeState("idle"); setFcmWakeMsg(null); }, 4000);
+  };
+
   return (
     <header className="h-16 flex items-center justify-between px-4 sm:px-6 bg-slate-900 border-b border-slate-800 shadow-sm z-20 w-full text-slate-100 flex-shrink-0">
       <div className="flex items-center gap-3">
@@ -204,10 +230,61 @@ export function Navbar() {
           >
             <RefreshCw className={cn("w-4 h-4", fcmWakePending && "animate-spin")} />
           </button>
+          {showingCount !== null && (
+            <span className="hidden sm:inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1 text-xs">
+              <span className="font-medium text-slate-400">Showing</span>
+              <span className="font-semibold text-slate-100">{showingCount}</span>
+            </span>
+          )}
         </div>
       </div>
 
       <div className="flex items-center gap-2 sm:gap-4">
+        {/* FCM Wake Controls */}
+        <div className="hidden sm:flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={fcmWakePingAll}
+              onChange={(e) => setFcmWakePingAll(e.target.checked)}
+              className="rounded border-slate-600 bg-slate-900 accent-indigo-500"
+            />
+            Ping all
+          </label>
+          {fcmWakeMsg && (
+            <span className={cn(
+              "text-xs px-2 py-1 rounded-full border flex items-center gap-1.5",
+              fcmWakeState === "success"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                : "border-rose-500/30 bg-rose-500/10 text-rose-400"
+            )}>
+              {fcmWakeState === "success"
+                ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                : <XCircle className="w-3.5 h-3.5 shrink-0" />}
+              {fcmWakeMsg}
+            </span>
+          )}
+          <button
+            onClick={triggerFcmWake}
+            disabled={fcmWakeState === "loading"}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all duration-200",
+              fcmWakeState === "loading"
+                ? "bg-slate-800 border-slate-700 text-slate-500 cursor-not-allowed"
+                : fcmWakeState === "success"
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                : fcmWakeState === "error"
+                ? "bg-rose-500/10 border-rose-500/30 text-rose-400"
+                : "bg-indigo-600/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-600/20 hover:border-indigo-400/50 hover:text-indigo-300"
+            )}
+          >
+            {fcmWakeState === "loading"
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <BellRing className="w-3.5 h-3.5" />}
+            {fcmWakeState === "loading" ? "Sending..." : "Wake Devices"}
+          </button>
+        </div>
+
         {session?.user && (
           <div className="flex items-center gap-2 sm:gap-4">
             <div className="flex items-center gap-2 bg-slate-800 px-2.5 sm:px-3 py-1.5 rounded-full border border-slate-700">
