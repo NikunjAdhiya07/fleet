@@ -241,7 +241,7 @@ export function Navbar() {
 
       <div className="flex items-center gap-2 sm:gap-4">
         {/* FCM Wake Controls */}
-        <div className="hidden sm:flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -249,7 +249,7 @@ export function Navbar() {
               onChange={(e) => setFcmWakePingAll(e.target.checked)}
               className="rounded border-slate-600 bg-slate-900 accent-indigo-500"
             />
-            Ping all
+            <span className="hidden sm:inline">Ping all</span>
           </label>
           {fcmWakeMsg && (
             <span className={cn(
@@ -261,7 +261,7 @@ export function Navbar() {
               {fcmWakeState === "success"
                 ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                 : <XCircle className="w-3.5 h-3.5 shrink-0" />}
-              {fcmWakeMsg}
+              <span className="hidden sm:inline">{fcmWakeMsg}</span>
             </span>
           )}
           <button
@@ -281,7 +281,7 @@ export function Navbar() {
             {fcmWakeState === "loading"
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
               : <BellRing className="w-3.5 h-3.5" />}
-            {fcmWakeState === "loading" ? "Sending..." : "Wake Devices"}
+            <span className="hidden sm:inline">{fcmWakeState === "loading" ? "Sending..." : "Wake Devices"}</span>
           </button>
         </div>
 
