@@ -949,6 +949,9 @@ export default function CallLogsPage() {
       const cat = intel?.category ?? "";
       const contactName = intel?.contactName || log.contactName || "";
 
+      // Skip staff and personal categories in call completion
+      if (cat === "staff" || cat === "personal") continue;
+
       // Pair: find earliest unused outgoing to same phone by same employee within 2h
       let callbackAt: number | null = null;
       const outgoing = outgoingByKey.get(k) ?? [];
@@ -960,6 +963,9 @@ export default function CallLogsPage() {
         break;
       }
 
+      // Skip already called-back entries
+      if (callbackAt !== null) continue;
+
       rows.push({
         id: `${String(log._id ?? "")}|${missedTs}`,
         employee: emp,
@@ -968,7 +974,7 @@ export default function CallLogsPage() {
         category: cat,
         missedAt: missedTs,
         callbackAt,
-        completed: callbackAt !== null,
+        completed: false,
         totalCalls: callCountByKey.get(k) ?? 1,
       });
     }
