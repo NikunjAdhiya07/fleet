@@ -15,7 +15,7 @@ export function Navbar() {
   const { showingCount } = useNavbarCount();
   const [fcmWakePending, setFcmWakePending] = useState(false);
   const [fcmWakeState, setFcmWakeState] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [fcmWakePingAll, setFcmWakePingAll] = useState(false);
+  const [fcmWakePingAll, setFcmWakePingAll] = useState(true);
   const [fcmWakeMsg, setFcmWakeMsg] = useState<string | null>(null);
   const pathname = usePathname();
   const restoreAttemptRef = useRef(0);
