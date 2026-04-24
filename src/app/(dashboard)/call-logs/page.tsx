@@ -4,7 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, XCircle, ChevronDown, Clock, CheckCircle2, X } from "lucide-react";
+import { PhoneIncoming, PhoneOutgoing, PhoneMissed, HelpCircle, Search, Loader2, User, UserX, ArrowRight, ArrowLeftRight, Plus, XCircle, ChevronDown, Clock, CheckCircle2, X, Filter, Pencil, Check, ChevronUp } from "lucide-react";
 import { format, addDays, subDays, startOfDay, endOfDay } from "date-fns";
 import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
@@ -77,6 +77,7 @@ export default function CallLogsPage() {
   const [hidePersonalContacts, setHidePersonalContacts] = useState(false);
   const [hideStaffContacts, setHideStaffContacts] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL"); // intelligence category filter
+  const [contactPhoneFilter, setContactPhoneFilter] = useState<string | null>(null); // table-only phone filter from insights click
   const [comparisonPanels, setComparisonPanels] = useState<
     Array<{ id: string; dateFilter: "TODAY" | "YESTERDAY" | "CUSTOM" }>
   >([]);
@@ -89,6 +90,13 @@ export default function CallLogsPage() {
   const [graphExclusionHoursOpen, setGraphExclusionHoursOpen] = useState(false);
   const [showUnidentifiedModal, setShowUnidentifiedModal] = useState(false);
   const [isDesktop, setIsDesktop] = useState(true);
+  const [showFilterPopup, setShowFilterPopup] = useState(false);
+  const [insightsExpanded, setInsightsExpanded] = useState(true);
+  const [insightsLimit, setInsightsLimit] = useState(3);
+  // Inline edit state: key = "phoneNorm|employeeName", value = { contactName, category }
+  const [editingCell, setEditingCell] = useState<{ key: string; field: "contactName" | "category" } | null>(null);
+  const [editingValue, setEditingValue] = useState<string>("");
+  const [savingEdit, setSavingEdit] = useState<string | null>(null); // key being saved
   const logsCacheRef = useRef<Map<string, { logs: any[]; totalCount: number }>>(new Map());
   const latestFetchKeyRef = useRef<string>("");
   const fetchedTagPhonesRef = useRef<Set<string>>(new Set());
@@ -401,12 +409,40 @@ export default function CallLogsPage() {
   const getEmployeeDepartment = (log: any) =>
     log.driverId?.userId?.departmentId?.name || log.employeeDepartment?.departmentName || "";
 
+  // Strict date boundaries for client-side enforcement (prevents data leakage from cached API results)
+  const activeDateBounds = useMemo(() => {
+    if (dateFilter === "TODAY") {
+      return { start: startOfDay(new Date()).getTime(), end: endOfDay(new Date()).getTime() };
+    }
+    if (dateFilter === "TOMORROW") {
+      const t = addDays(new Date(), 1);
+      return { start: startOfDay(t).getTime(), end: endOfDay(t).getTime() };
+    }
+    if (dateFilter === "YESTERDAY") {
+      const y = subDays(new Date(), 1);
+      return { start: startOfDay(y).getTime(), end: endOfDay(y).getTime() };
+    }
+    if (dateFilter === "CUSTOM" && dateRange?.from) {
+      return {
+        start: startOfDay(dateRange.from).getTime(),
+        end: (dateRange.to ? endOfDay(dateRange.to) : endOfDay(dateRange.from)).getTime(),
+      };
+    }
+    return null; // ALL — no strict bound
+  }, [dateFilter, dateRange]);
+
   const rawFilteredLogs = useMemo(() => {
     const q = String(searchQuery ?? "").trim();
     const qLower = q.toLowerCase();
     const qDigits = q.replace(/\D/g, "");
     const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
     return logs.filter((log) => {
+      // Strict client-side date boundary check to prevent data leakage between date filter changes
+      if (activeDateBounds && log.timestamp) {
+        const ts = new Date(log.timestamp).getTime();
+        if (isNaN(ts) || ts < activeDateBounds.start || ts > activeDateBounds.end) return false;
+      }
+
       const phoneRaw = String(log.phoneNumber ?? "");
       const phoneNorm = last10(normalizePhoneNumber(phoneRaw)) || last10(phoneRaw);
       const emp = getEmployeeName(log);
@@ -436,7 +472,7 @@ export default function CallLogsPage() {
       const keepByMissed = !hideMissedCalls || log.callType !== "MISSED";
       return matchesSearch && matchesEmployee && keepByDuration && keepByMissed;
     });
-  }, [logs, searchQuery, selectedEmployee, hideShortCalls, hideMissedCalls, intelligenceTags, tags]);
+  }, [logs, searchQuery, selectedEmployee, hideShortCalls, hideMissedCalls, intelligenceTags, tags, activeDateBounds]);
 
   // Deduplicate logs introduced by an old Android app bug
   const dedupedFilteredLogs = useMemo(() => {
@@ -522,6 +558,19 @@ export default function CallLogsPage() {
     });
   }, [categoryFilteredLogs, ignoredEmployeeSet, excludedHourSet]);
 
+  // Used for category stats in the summary bar — always based on pre-category-filter data
+  // so all category chips remain visible even when one is active.
+  const graphDisplayLogsForStats = useMemo(() => {
+    return filteredLogs.filter((log) => {
+      if (ignoredEmployeeSet.has(getEmployeeName(log))) return false;
+      if (excludedHourSet.size === 0) return true;
+      if (!log.timestamp) return true;
+      const d = new Date(log.timestamp);
+      if (isNaN(d.getTime())) return true;
+      return !excludedHourSet.has(d.getHours());
+    });
+  }, [filteredLogs, ignoredEmployeeSet, excludedHourSet]);
+
   useEffect(() => {
     if (dedupedFilteredLogs.length > 0) {
       fetchTags(dedupedFilteredLogs);
@@ -584,6 +633,8 @@ export default function CallLogsPage() {
     return ["ALL", "personal", "staff", "New Client", "Existing Client", "courier"];
   }, []);
 
+  const CATEGORY_OPTIONS = ["personal", "staff", "New Client", "Existing Client", "courier"] as const;
+
   const IdentifiedTag = ({
     log,
     getEmployeeName,
@@ -595,27 +646,92 @@ export default function CallLogsPage() {
   }) => {
     const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
     const normalized = last10(normalizePhoneNumber(String(log.phoneNumber ?? ""))) || last10(String(log.phoneNumber ?? ""));
-    const key = `${normalized}|${getEmployeeName(log)}`;
-    const tag = intelligenceTags[key];
-    if (!tag) return <span className="text-slate-500 text-xs">—</span>;
+    const emp = getEmployeeName(log);
+    const key = `${normalized}|${emp}`;
+    const tag = intelligenceTags[key] ?? {};
+    const isSaving = savingEdit === key;
+
+    const startEdit = (field: "contactName" | "category", current: string) => {
+      setEditingCell({ key, field });
+      setEditingValue(current);
+    };
+
+    const commitEdit = () => {
+      if (!editingCell || editingCell.key !== key) return;
+      saveInlineEdit(log.phoneNumber, emp, editingCell.field, editingValue);
+    };
+
+    const cancelEdit = () => {
+      if (editingCell?.key === key) setEditingCell(null);
+    };
+
+    const isEditingName = editingCell?.key === key && editingCell.field === "contactName";
+    const isEditingCat  = editingCell?.key === key && editingCell.field === "category";
+
     return (
-      <div className="flex flex-wrap gap-1">
-        {tag.category && (
-          <span
+      <div className="flex flex-wrap gap-1 items-center min-w-[120px]">
+        {/* Category chip — click to cycle / edit */}
+        {isEditingCat ? (
+          <div className="flex items-center gap-1">
+            <select
+              autoFocus
+              value={editingValue}
+              onChange={e => setEditingValue(e.target.value)}
+              onBlur={commitEdit}
+              onKeyDown={e => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }}
+              className="text-[11px] rounded border border-indigo-500/60 bg-slate-800 text-slate-100 px-1.5 py-0.5 outline-none"
+            >
+              <option value="">— none —</option>
+              {CATEGORY_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <button type="button" onClick={commitEdit} className="text-indigo-400 hover:text-indigo-300"><Check className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={cancelEdit} className="text-slate-500 hover:text-slate-300"><X className="h-3.5 w-3.5" /></button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => startEdit("category", tag.category ?? "")}
+            title="Click to edit category"
             className={cn(
-              "inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border",
-              CATEGORY_COLORS[tag.category] ?? "bg-slate-700 text-slate-300 border-slate-600"
+              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors group",
+              tag.category
+                ? CATEGORY_COLORS[tag.category] ?? "bg-slate-700 text-slate-300 border-slate-600"
+                : "border-dashed border-slate-700 text-slate-600 hover:border-slate-500 hover:text-slate-400"
             )}
           >
-            {tag.category}
-          </span>
+            {tag.category ?? "add category"}
+            <Pencil className="h-2.5 w-2.5 opacity-0 group-hover:opacity-60 transition-opacity" />
+          </button>
         )}
-        {tag.contactName && (
-          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border bg-violet-500/15 text-violet-300 border-violet-500/30">
-            {tag.contactName}
-          </span>
+
+        {/* Contact name chip — click to edit */}
+        {isEditingName ? (
+          <div className="flex items-center gap-1">
+            <input
+              autoFocus
+              type="text"
+              value={editingValue}
+              onChange={e => setEditingValue(e.target.value)}
+              onBlur={commitEdit}
+              onKeyDown={e => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }}
+              className="text-[11px] rounded border border-indigo-500/60 bg-slate-800 text-slate-100 px-2 py-0.5 outline-none w-28"
+              placeholder="Contact name"
+            />
+            <button type="button" onClick={commitEdit} className="text-indigo-400 hover:text-indigo-300"><Check className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={cancelEdit} className="text-slate-500 hover:text-slate-300"><X className="h-3.5 w-3.5" /></button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => startEdit("contactName", tag.contactName ?? "")}
+            title="Click to edit contact name"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border group transition-colors bg-violet-500/15 text-violet-300 border-violet-500/30 hover:bg-violet-500/25"
+          >
+            {isSaving ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : null}
+            {tag.contactName ?? <span className="text-slate-600 italic">add name</span>}
+            <Pencil className="h-2.5 w-2.5 opacity-0 group-hover:opacity-60 transition-opacity" />
+          </button>
         )}
-        {!tag.category && !tag.contactName && <span className="text-slate-500 text-xs">—</span>}
       </div>
     );
   };
@@ -757,13 +873,134 @@ export default function CallLogsPage() {
   const categoryDurationStats = useMemo(() => {
     const result: Record<string, number> = {};
     for (const cat of CATEGORY_LIST) result[cat] = 0;
-    for (const log of graphDisplayLogs) {
+    for (const log of graphDisplayLogsForStats) {
       const key = intelKey(log);
       const cat = intelligenceTags[key]?.category;
       if (cat && cat in result) result[cat] += Number(log.duration) || 0;
     }
     return result;
+  }, [graphDisplayLogsForStats, intelligenceTags]);
+
+  const categoryCallCountStats = useMemo(() => {
+    const result: Record<string, number> = {};
+    for (const cat of CATEGORY_LIST) result[cat] = 0;
+    for (const log of graphDisplayLogsForStats) {
+      const key = intelKey(log);
+      const cat = intelligenceTags[key]?.category;
+      if (cat && cat in result) result[cat] += 1;
+    }
+    return result;
   }, [graphDisplayLogs, intelligenceTags]);
+
+  const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+
+  type CompletionRow = {
+    id: string;
+    employee: string;
+    phoneNumber: string;
+    contactName: string;
+    category: string;
+    missedAt: number;
+    callbackAt: number | null;
+    completed: boolean;
+    totalCalls: number;
+  };
+
+  // Produces one row per missed call (limited to New Client / Existing Client / Unknown),
+  // paired with the earliest unused outgoing callback within 2 hours.
+  const completionRows = useMemo((): CompletionRow[] => {
+    const last10 = (p: string) => String(p ?? "").replace(/\D/g, "").slice(-10);
+
+    // Build total-call count per phone+employee across the full filtered set
+    const callCountByKey = new Map<string, number>();
+    for (const log of categoryFilteredLogs) {
+      const phoneNorm = last10(normalizePhoneNumber(String(log.phoneNumber ?? ""))) || last10(String(log.phoneNumber ?? ""));
+      const emp = getEmployeeName(log);
+      const k = `${phoneNorm}|${emp}`;
+      callCountByKey.set(k, (callCountByKey.get(k) ?? 0) + 1);
+    }
+
+    // Build lookup of outgoing calls keyed by "phoneNorm|emp", sorted ascending
+    const outgoingByKey = new Map<string, { ts: number; used: boolean }[]>();
+    for (const log of categoryFilteredLogs) {
+      if (log.callType !== "OUTGOING" || !log.timestamp) continue;
+      const ts = new Date(log.timestamp).getTime();
+      if (isNaN(ts)) continue;
+      const phoneNorm = last10(normalizePhoneNumber(String(log.phoneNumber ?? ""))) || last10(String(log.phoneNumber ?? ""));
+      const emp = getEmployeeName(log);
+      const k = `${phoneNorm}|${emp}`;
+      if (!outgoingByKey.has(k)) outgoingByKey.set(k, []);
+      outgoingByKey.get(k)!.push({ ts, used: false });
+    }
+    outgoingByKey.forEach((arr) => arr.sort((a, b) => a.ts - b.ts));
+
+    const rows: CompletionRow[] = [];
+
+    for (const log of categoryFilteredLogs) {
+      if (log.callType !== "MISSED" || !log.timestamp) continue;
+      const missedTs = new Date(log.timestamp).getTime();
+      if (isNaN(missedTs)) continue;
+
+      const phoneRaw = String(log.phoneNumber ?? "");
+      const phoneNorm = last10(normalizePhoneNumber(phoneRaw)) || last10(phoneRaw);
+      const emp = getEmployeeName(log);
+      const k = `${phoneNorm}|${emp}`;
+      const intel = intelligenceTags[k];
+      const cat = intel?.category ?? "";
+      const contactName = intel?.contactName || log.contactName || "";
+
+      // Pair: find earliest unused outgoing to same phone by same employee within 2h
+      let callbackAt: number | null = null;
+      const outgoing = outgoingByKey.get(k) ?? [];
+      for (const entry of outgoing) {
+        if (entry.used || entry.ts < missedTs) continue;
+        if (entry.ts - missedTs > TWO_HOURS_MS) break;
+        entry.used = true;
+        callbackAt = entry.ts;
+        break;
+      }
+
+      rows.push({
+        id: `${String(log._id ?? "")}|${missedTs}`,
+        employee: emp,
+        phoneNumber: phoneRaw,
+        contactName,
+        category: cat,
+        missedAt: missedTs,
+        callbackAt,
+        completed: callbackAt !== null,
+        totalCalls: callCountByKey.get(k) ?? 1,
+      });
+    }
+
+    // Sort: not-completed first (needs attention), then by missedAt desc
+    return rows.sort((a, b) => {
+      if (a.completed !== b.completed) return a.completed ? 1 : -1;
+      return b.missedAt - a.missedAt;
+    });
+  }, [categoryFilteredLogs, intelligenceTags, TWO_HOURS_MS]);
+
+  // Summary aggregates derived from completionRows
+  const completionSummary = useMemo(() => {
+    type Cat = "New Client" | "Existing Client" | "Unknown";
+    const cats: Cat[] = ["New Client", "Existing Client", "Unknown"];
+    const result: Record<Cat, { missed: number; completed: number; notCompleted: number; ratio: number }> = {
+      "New Client":      { missed: 0, completed: 0, notCompleted: 0, ratio: 0 },
+      "Existing Client": { missed: 0, completed: 0, notCompleted: 0, ratio: 0 },
+      "Unknown":         { missed: 0, completed: 0, notCompleted: 0, ratio: 0 },
+    };
+    for (const row of completionRows) {
+      const bucket: Cat = (row.category === "New Client" || row.category === "Existing Client") ? row.category : "Unknown";
+      result[bucket].missed += 1;
+      if (row.completed) result[bucket].completed += 1;
+      else result[bucket].notCompleted += 1;
+    }
+    for (const cat of cats) {
+      const r = result[cat];
+      r.ratio = r.missed > 0 ? Math.round((r.completed / r.missed) * 100) : 0;
+    }
+    return result;
+  }, [completionRows]);
 
   const topContactInsights = useMemo(() => {
     const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
@@ -844,7 +1081,6 @@ export default function CallLogsPage() {
     }
     
     return Array.from(contactMap.values())
-      .filter(c => c.totalCalls >= 5)
       .map(c => ({
         ...c,
         employeeNames: Array.from(c.employeeNames),
@@ -879,44 +1115,83 @@ export default function CallLogsPage() {
     setGraphFilter(null);
   }, []);
 
-  useEffect(() => {
-    if (!graphFilter) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (graphCardRef.current && !graphCardRef.current.contains(e.target as Node)) {
-        setGraphFilter(null);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [graphFilter]);
+  // Graph filter no longer resets on outside click — use the Reset button in the graph header.
 
-  useEffect(() => {
-    if (categoryFilter === "ALL") return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (categoryFilterRef.current && !categoryFilterRef.current.contains(e.target as Node)) {
-        setCategoryFilter("ALL");
+  // Category filter no longer resets on outside click — use the Reset button instead.
+
+  const saveInlineEdit = useCallback(async (
+    phoneNumber: string,
+    employeeName: string,
+    field: "contactName" | "category",
+    value: string
+  ) => {
+    const last10 = (p: string) => String(p ?? "").replace(/\D/g, "").slice(-10);
+    const norm = last10(normalizePhoneNumber(phoneNumber)) || last10(phoneNumber);
+    const key = `${norm}|${employeeName}`;
+    setSavingEdit(key);
+    try {
+      const body: any = { phoneNumber, employeeName };
+      body[field] = value;
+      const res = await fetch("/api/contact-intelligence/update", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        // Optimistically update local intelligenceTags so UI reflects immediately
+        setIntelligenceTags(prev => ({
+          ...prev,
+          [key]: { ...(prev[key] ?? {}), [field]: value },
+        }));
       }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [categoryFilter]);
+    } finally {
+      setSavingEdit(null);
+      setEditingCell(null);
+    }
+  }, []);
+
+  // Base for table: same exclusions as the graph (employees + hours)
+  const tableBaseLogs = useMemo(() => {
+    return categoryFilteredLogs.filter((log) => {
+      if (ignoredEmployeeSet.has(getEmployeeName(log))) return false;
+      if (excludedHourSet.size === 0) return true;
+      if (!log.timestamp) return true;
+      const d = new Date(log.timestamp);
+      if (isNaN(d.getTime())) return true;
+      return !excludedHourSet.has(d.getHours());
+    });
+  }, [categoryFilteredLogs, ignoredEmployeeSet, excludedHourSet]);
 
   const tableLogs = useMemo(() => {
-    if (!graphFilter) return categoryFilteredLogs;
-    return categoryFilteredLogs.filter((log) => {
-      if (!log.timestamp) return false;
-      const t = new Date(log.timestamp);
-      if (isNaN(t.getTime())) return false;
-      if (graphFilter.range) {
-        const ts = t.getTime();
-        if (ts < graphFilter.range.startTs || ts > graphFilter.range.endTs) return false;
-      }
-      if (graphFilter.employee && getEmployeeName(log) !== graphFilter.employee) return false;
-      if (graphFilter.callType && log.callType !== graphFilter.callType) return false;
-      if (graphFilter.xMode === "hour") return t.getHours() === graphFilter.hour;
-      return startOfDay(t).getTime() === graphFilter.dateTs;
-    });
-  }, [categoryFilteredLogs, graphFilter]);
+    const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
+    let base = tableBaseLogs;
+
+    if (graphFilter) {
+      base = base.filter((log) => {
+        if (!log.timestamp) return false;
+        const t = new Date(log.timestamp);
+        if (isNaN(t.getTime())) return false;
+        if (graphFilter.range) {
+          const ts = t.getTime();
+          if (ts < graphFilter.range.startTs || ts > graphFilter.range.endTs) return false;
+        }
+        if (graphFilter.employee && getEmployeeName(log) !== graphFilter.employee) return false;
+        if (graphFilter.callType && log.callType !== graphFilter.callType) return false;
+        if (graphFilter.xMode === "hour") return t.getHours() === graphFilter.hour;
+        return startOfDay(t).getTime() === graphFilter.dateTs;
+      });
+    }
+
+    if (contactPhoneFilter) {
+      const target = last10(contactPhoneFilter);
+      base = base.filter((log) => {
+        const norm = last10(normalizePhoneNumber(String(log.phoneNumber ?? ""))) || last10(String(log.phoneNumber ?? ""));
+        return norm === target;
+      });
+    }
+
+    return base;
+  }, [tableBaseLogs, graphFilter, contactPhoneFilter]);
 
   const compareGraphEmployees = useMemo(
     () => selectedCompareEmployees.filter((e) => !ignoredEmployeeSet.has(e)),
@@ -1363,8 +1638,150 @@ export default function CallLogsPage() {
     </div>
   );
 
+  const resetAllFilters = useCallback(() => {
+    setCategoryFilter("ALL");
+    setSelectedEmployee("ALL");
+    setActiveCallTypeFilters(new Set(["ALL"]));
+    setHidePersonalContacts(false);
+    setHideStaffContacts(false);
+    setHideMissedCalls(false);
+    setDateFilter("TODAY");
+    setDateRange(undefined);
+    setIgnoredGraphEmployees([]);
+    setExcludedGraphHours([]);
+    setContactPhoneFilter(null);
+    setSearchQuery("");
+    setGraphFilter(null);
+  }, []);
+
+  const activeFilters = useMemo(() => {
+    const filters: { id: string; label: string; onRemove: () => void }[] = [];
+    if (categoryFilter !== "ALL")
+      filters.push({ id: "cat", label: categoryFilter, onRemove: () => setCategoryFilter("ALL") });
+    if (selectedEmployee !== "ALL")
+      filters.push({ id: "emp", label: selectedEmployee, onRemove: () => setSelectedEmployee("ALL") });
+    if (!activeCallTypeFilters.has("ALL")) {
+      Array.from(activeCallTypeFilters).forEach(t =>
+        filters.push({
+          id: `ct-${t}`,
+          label: t[0] + t.slice(1).toLowerCase(),
+          onRemove: () => setActiveCallTypeFilters(prev => {
+            const n = new Set(prev); n.delete(t);
+            return n.size === 0 ? new Set(["ALL"]) : n;
+          }),
+        })
+      );
+    }
+    if (hidePersonalContacts) filters.push({ id: "hpc", label: "Personal hidden", onRemove: () => setHidePersonalContacts(false) });
+    if (hideStaffContacts)    filters.push({ id: "hsc", label: "Staff hidden",    onRemove: () => setHideStaffContacts(false) });
+    if (hideMissedCalls)      filters.push({ id: "hmc", label: "Missed hidden",   onRemove: () => setHideMissedCalls(false) });
+    if (dateFilter !== "TODAY")
+      filters.push({
+        id: "date",
+        label: dateFilter === "ALL" ? "All Time" : dateFilter === "YESTERDAY" ? "Yesterday" : dateFilter === "CUSTOM" ? "Custom range" : dateFilter,
+        onRemove: () => { setDateFilter("TODAY"); setDateRange(undefined); },
+      });
+    if (ignoredGraphEmployees.length > 0)
+      filters.push({ id: "ige", label: `${ignoredGraphEmployees.length} excluded from graph`, onRemove: () => setIgnoredGraphEmployees([]) });
+    if (excludedGraphHours.length > 0)
+      filters.push({ id: "egh", label: `${excludedGraphHours.length} hour(s) excluded`, onRemove: () => setExcludedGraphHours([]) });
+    if (contactPhoneFilter) {
+      const name = topContactInsights.find(i => i.phone.replace(/\D/g, "").slice(-10) === contactPhoneFilter)?.contactName ?? contactPhoneFilter;
+      filters.push({ id: "cpf", label: `Contact: ${name}`, onRemove: () => setContactPhoneFilter(null) });
+    }
+    if (searchQuery.trim())
+      filters.push({ id: "sq", label: `Search: "${searchQuery.trim()}"`, onRemove: () => setSearchQuery("") });
+    if (graphFilter)
+      filters.push({ id: "gf", label: "Graph selection", onRemove: () => setGraphFilter(null) });
+    return filters;
+  }, [categoryFilter, selectedEmployee, activeCallTypeFilters, hidePersonalContacts, hideStaffContacts, hideMissedCalls, dateFilter, ignoredGraphEmployees, excludedGraphHours, contactPhoneFilter, searchQuery, graphFilter, topContactInsights]);
+
   return (
-    <div className="space-y-3 relative">
+    <div className="space-y-3 relative pb-20 sm:pb-16">
+      {/* ── STICKY FILTER POPUP ── always visible */}
+      <div className="fixed bottom-4 right-3 sm:bottom-5 sm:right-5 z-[100] flex flex-col items-end gap-2 pointer-events-none">
+        {/* Expanded panel — only when filters exist and popup is open */}
+        {showFilterPopup && activeFilters.length > 0 && (
+          <div
+            className="pointer-events-auto w-[min(320px,calc(100vw-24px))] rounded-2xl border border-slate-700 bg-slate-900/95 shadow-2xl shadow-black/60 backdrop-blur-md overflow-hidden"
+            style={{ maxHeight: "calc(100vh - 120px)" }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Filter className="h-3.5 w-3.5 text-indigo-400" />
+                <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">Active Filters</span>
+                <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/15 rounded-full px-1.5 py-0.5">{activeFilters.length}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => { resetAllFilters(); setShowFilterPopup(false); }}
+                className="text-[11px] font-bold text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 rounded-full px-2.5 py-1 transition-colors"
+              >
+                Reset all
+              </button>
+            </div>
+            {/* Chips */}
+            <div className="overflow-y-auto p-3 flex flex-col gap-2" style={{ maxHeight: "320px" }}>
+              {activeFilters.map((f) => (
+                <div
+                  key={f.id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-slate-700/80 bg-slate-800/60 px-3 py-2"
+                >
+                  <span className="text-xs text-slate-200 font-medium truncate">{f.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => { f.onRemove(); if (activeFilters.length === 1) setShowFilterPopup(false); }}
+                    className="shrink-0 rounded-full p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                    aria-label={`Remove ${f.label}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Bottom row: Reset all (when filters active) + FAB toggle */}
+        <div className="pointer-events-auto flex items-center gap-2">
+          {activeFilters.length > 0 && (
+            <button
+              type="button"
+              onClick={() => { resetAllFilters(); setShowFilterPopup(false); }}
+              className="flex items-center gap-1.5 rounded-full px-3.5 py-2.5 text-xs font-bold shadow-xl shadow-black/40 bg-rose-600/90 hover:bg-rose-500 text-white border border-rose-500/60 transition-all duration-200"
+              title="Clear all active filters"
+            >
+              <X className="h-3.5 w-3.5 shrink-0" />
+              Reset with Active Filters
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => activeFilters.length > 0 && setShowFilterPopup(v => !v)}
+            className={cn(
+              "flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-bold shadow-xl shadow-black/40 transition-all duration-200",
+              activeFilters.length === 0
+                ? "bg-slate-800/60 border border-slate-700/50 text-slate-500 cursor-default"
+                : showFilterPopup
+                  ? "bg-slate-800 border border-slate-700 text-slate-200 hover:bg-slate-700"
+                  : "bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-500"
+            )}
+          >
+            <Filter className="h-4 w-4 shrink-0" />
+            <span>
+              {activeFilters.length === 0
+                ? "No active filters"
+                : `${activeFilters.length} filter${activeFilters.length !== 1 ? "s" : ""} active`}
+            </span>
+            {activeFilters.length > 0 && (
+              showFilterPopup
+                ? <ChevronDown className="h-3.5 w-3.5" />
+                : <ChevronUp className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </div>
+      </div>
+
       {/* Employee Filter + Category Filter — side by side */}
       <div className="relative z-10 grid grid-cols-1 lg:grid-cols-2 gap-3">
         {/* Employee Filter */}
@@ -1424,13 +1841,13 @@ export default function CallLogsPage() {
 
         {/* Category Filter */}
         <div ref={categoryFilterRef} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-slate-400">Category</span>
             {categoryFilter !== "ALL" && (
               <button
                 type="button"
                 onClick={() => setCategoryFilter("ALL")}
-                className="text-[11px] font-medium text-indigo-400 hover:text-indigo-300"
+                className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 transition-colors"
               >
                 Clear
               </button>
@@ -1645,15 +2062,6 @@ export default function CallLogsPage() {
                     {divideByEmployee ? "Total view" : "Divide by employee"}
                   </button>
                 )}
-                {graphFilter && (
-                  <button
-                    type="button"
-                    onClick={resetGraphFilter}
-                    className="flex items-center gap-1.5 px-[14.4px] py-[7.2px] rounded-full text-[13.2px] font-semibold bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/20 hover:text-indigo-300 transition-colors"
-                  >
-                    Reset
-                  </button>
-                )}
                 <button
                   onClick={toggleComparisonMode}
                   className={cn(
@@ -1727,31 +2135,63 @@ export default function CallLogsPage() {
                     {loading ? "—" : formatMinutesOrHours(callDurationStats.totalSec)}
                   </span>
                 </span>
-                <span className="whitespace-nowrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveCallTypeFilters(new Set(["INCOMING"]));
+                  }}
+                  className="whitespace-nowrap hover:opacity-80 transition-opacity rounded px-0.5"
+                  title="Filter by Incoming calls"
+                >
                   <span className="text-emerald-500/90">Incoming</span>{" "}
                   <span className="tabular-nums font-medium text-emerald-400">
                     {loading ? "—" : formatMinutesOrHours(callDurationStats.incomingSec)}
                   </span>
-                </span>
-                <span className="whitespace-nowrap">
+                  {!loading && <span className="text-emerald-600/70 ml-0.5">({callTypeStats.incoming})</span>}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveCallTypeFilters(new Set(["OUTGOING"]));
+                  }}
+                  className="whitespace-nowrap hover:opacity-80 transition-opacity rounded px-0.5"
+                  title="Filter by Outgoing calls"
+                >
                   <span className="text-blue-400/90">Outgoing</span>{" "}
                   <span className="tabular-nums font-medium text-blue-300">
                     {loading ? "—" : formatMinutesOrHours(callDurationStats.outgoingSec)}
                   </span>
-                </span>
+                  {!loading && <span className="text-blue-600/70 ml-0.5">({callTypeStats.outgoing})</span>}
+                </button>
                 {/* separator */}
                 <span className="text-slate-700 select-none">·</span>
                 {CATEGORY_LIST.map((cat) => {
                   const secs = categoryDurationStats[cat];
-                  if (!secs && !loading) return null;
+                  const count = categoryCallCountStats[cat];
                   const c = catColors[cat];
+                  const isActive = categoryFilter === cat;
+                  const isFiltering = categoryFilter !== "ALL";
                   return (
-                    <span key={cat} className="whitespace-nowrap">
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setCategoryFilter(isActive ? "ALL" : cat)}
+                      className={cn(
+                        "whitespace-nowrap transition-opacity rounded px-0.5",
+                        isActive
+                          ? "ring-1 ring-slate-600 bg-slate-800/50 opacity-100"
+                          : isFiltering
+                            ? "opacity-40 hover:opacity-70"
+                            : "hover:opacity-80"
+                      )}
+                      title={isActive ? `Clear ${c.label} filter` : `Filter by ${c.label}`}
+                    >
                       <span className={c.muted}>{c.label}</span>{" "}
                       <span className={cn("tabular-nums font-medium", c.text)}>
                         {loading ? "—" : formatMinutesOrHours(secs)}
                       </span>
-                    </span>
+                      {!loading && count > 0 && <span className={cn("ml-0.5 opacity-60", c.text)}>({count})</span>}
+                    </button>
                   );
                 })}
                 {!loading && unknownSec > 0 && (
@@ -1969,66 +2409,309 @@ export default function CallLogsPage() {
         </div>
       </Card>
 
-      {/* Top Contact Insights — horizontal scrollable cards */}
+      {/* Top Contact Insights */}
       <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900 overflow-hidden">
-        <div className="px-4 py-2.5 flex items-center justify-between border-b border-slate-800">
+        <button
+          type="button"
+          onClick={() => setInsightsExpanded(v => !v)}
+          className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-slate-800/40 transition-colors"
+        >
           <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Top Contact Insights{selectedEmployee !== "ALL" ? ` · ${selectedEmployee}` : ""}
           </p>
-          {selectedEmployee !== "ALL" && topContactInsights.length > 0 && (
-            <span className="text-[11px] text-slate-600">{topContactInsights.length} contact{topContactInsights.length !== 1 ? "s" : ""}</span>
-          )}
-        </div>
+          <div className="flex items-center gap-2.5">
+            {topContactInsights.length > 0 && (
+              <span className="text-[11px] text-slate-600">{topContactInsights.length} contact{topContactInsights.length !== 1 ? "s" : ""}</span>
+            )}
+            <ChevronDown className={cn("h-3.5 w-3.5 text-slate-500 transition-transform duration-200", insightsExpanded && "rotate-180")} />
+          </div>
+        </button>
 
-        {selectedEmployee === "ALL" ? (
-          <div className="px-4 py-4 text-xs text-slate-500 text-center">
-            Select an employee to view detailed contact insights
-          </div>
-        ) : topContactInsights.length === 0 ? (
-          <div className="px-4 py-4 text-xs text-slate-500 text-center">
-            No call data found for {selectedEmployee} with current filters
-          </div>
-        ) : (
-          <div className="overflow-y-auto" style={{ maxHeight: "192px" }}>
-            <div className="flex flex-wrap gap-1.5 p-2.5">
-              {topContactInsights.map((item, idx) => (
-                <div
-                  key={`${item.phone}-${idx}`}
-                  className={cn(
-                    "flex items-center gap-2.5 rounded-md border px-2.5 py-1.5 shrink-0",
-                    idx === 0
-                      ? "border-amber-500/25 bg-amber-500/5"
-                      : "border-slate-800 bg-slate-800/30"
-                  )}
-                  style={{ width: "calc(16.666% - 0.625rem)", minWidth: "150px" }}
-                >
-                  <span className={cn(
-                    "text-[10px] font-bold tabular-nums shrink-0 w-5 text-center",
-                    idx === 0 ? "text-amber-400" : "text-slate-600"
-                  )}>
-                    #{idx + 1}
-                  </span>
-                  <div className="flex flex-col min-w-0 flex-1">
-                    <span className={cn(
-                      "text-[11px] font-semibold truncate leading-tight",
-                      item.contactName === "Unknown" ? "text-slate-500 italic" : "text-slate-100"
-                    )} title={item.contactName}>
-                      {item.contactName}
-                    </span>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-[10px] text-indigo-300 tabular-nums font-medium">{item.calls}c</span>
-                      <span className="text-slate-700 text-[9px]">·</span>
-                      <span className="text-[10px] text-emerald-300 tabular-nums font-medium">
-                        {item.totalDurationSec > 0 ? formatMinutesOrHours(item.totalDurationSec) : "—"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
+        {insightsExpanded && (
+          topContactInsights.length === 0 ? (
+            <div className="px-4 py-4 text-xs text-slate-500 text-center border-t border-slate-800">
+              No call data found with current filters
             </div>
+          ) : (
+          <div className="border-t border-slate-800 overflow-y-auto p-3" style={{ maxHeight: "420px" }}>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              {topContactInsights.slice(0, insightsLimit).map((item, idx) => {
+                const isActive = !!(contactPhoneFilter && item.phone && item.phone.replace(/\D/g, "").slice(-10) === contactPhoneFilter);
+                return (
+                  <button
+                    key={`ci-${item.phone}-${idx}`}
+                    type="button"
+                    onClick={() => {
+                      if (!item.phone) return;
+                      const norm = item.phone.replace(/\D/g, "").slice(-10);
+                      setContactPhoneFilter(prev => prev === norm ? null : norm);
+                      scrollToRecords();
+                    }}
+                    className={cn(
+                      "flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-all sm:hover:scale-[1.02] sm:hover:shadow-lg active:scale-[0.99]",
+                      isActive
+                        ? "border-indigo-500/60 bg-indigo-500/10 ring-1 ring-indigo-500/40"
+                        : idx === 0
+                          ? "border-amber-500/40 bg-amber-500/8 hover:bg-amber-500/12 hover:border-amber-500/60"
+                          : idx === 1
+                            ? "border-slate-500/40 bg-slate-500/8 hover:bg-slate-500/12 hover:border-slate-400/50"
+                            : idx === 2
+                              ? "border-orange-700/30 bg-orange-900/8 hover:bg-orange-900/12 hover:border-orange-600/40"
+                              : "border-slate-700/40 bg-slate-800/30 hover:bg-slate-800/60 hover:border-slate-600/50"
+                    )}
+                  >
+                    <span className={cn(
+                      "text-2xl font-black tabular-nums shrink-0 leading-none",
+                      idx === 0 ? "text-amber-400" : idx === 1 ? "text-slate-400" : idx === 2 ? "text-orange-700" : "text-slate-600"
+                    )}>
+                      #{idx + 1}
+                    </span>
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <span className={cn(
+                        "text-sm font-bold truncate leading-snug",
+                        item.contactName === "Unknown" ? "text-slate-400 italic" : "text-slate-100"
+                      )} title={item.contactName}>
+                        {item.contactName}
+                      </span>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs text-indigo-300 tabular-nums font-semibold">{item.calls} calls</span>
+                        <span className="text-slate-700 text-[10px]">·</span>
+                        <span className="text-xs text-emerald-300 tabular-nums font-medium">
+                          {item.totalDurationSec > 0 ? formatMinutesOrHours(item.totalDurationSec) : "—"}
+                        </span>
+                      </div>
+                    </div>
+                    {item.phone && <ArrowRight className="h-3.5 w-3.5 text-slate-600 shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+            {topContactInsights.length > 3 && (
+              <button
+                type="button"
+                onClick={() => setInsightsLimit(v => v === 3 ? topContactInsights.length : 3)}
+                className="mt-2.5 w-full py-1.5 rounded-lg border border-slate-700/60 text-[11px] font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+              >
+                {insightsLimit === 3 ? `Show all ${topContactInsights.length} contacts` : "Show less"}
+              </button>
+            )}
           </div>
+          )
         )}
       </div>
+
+      {/* Call Completion Table */}
+      {(completionRows.length > 0 || isLoading) && (() => {
+        type SumCat = "New Client" | "Existing Client" | "Unknown";
+        const summaryDefs: { key: SumCat; label: string; chipColors: string }[] = [
+          { key: "New Client",      label: "New Client",      chipColors: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
+          { key: "Existing Client", label: "Existing Client", chipColors: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" },
+          { key: "Unknown",         label: "Unknown",         chipColors: "bg-slate-500/15 text-slate-300 border-slate-600/40" },
+        ];
+
+        const formatCallbackGap = (missedTs: number, callbackTs: number) => {
+          const diffMin = Math.round((callbackTs - missedTs) / 60000);
+          if (diffMin < 60) return `${diffMin}m`;
+          const h = Math.floor(diffMin / 60);
+          const m = diffMin % 60;
+          return m > 0 ? `${h}h ${m}m` : `${h}h`;
+        };
+
+        return (
+          <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900 overflow-hidden">
+            {/* Header */}
+            <div className="px-4 py-2.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-y-2 gap-x-4">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Call Completion{selectedEmployee !== "ALL" ? ` · ${selectedEmployee}` : ""}
+                </p>
+                {completionRows.length > 0 && (
+                  <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/15 rounded-full px-1.5 py-0.5">
+                    {completionRows.length} missed
+                  </span>
+                )}
+              </div>
+              {/* Per-category summary chips */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                {summaryDefs.map(({ key, label, chipColors }) => {
+                  const s = completionSummary[key];
+                  if (s.missed === 0) return null;
+                  return (
+                    <span key={key} className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold", chipColors)}>
+                      {label}
+                      <span className="opacity-70">·</span>
+                      <span className="text-emerald-300">{s.completed}✓</span>
+                      <span className="opacity-40">/</span>
+                      <span className="text-rose-300">{s.notCompleted}✗</span>
+                      <span className="opacity-40">/</span>
+                      <span>{s.ratio}%</span>
+                    </span>
+                  );
+                })}
+                <span className="text-[10px] text-slate-600 hidden sm:inline">callback within 2h</span>
+              </div>
+            </div>
+
+            {isLoading && completionRows.length === 0 ? (
+              <div className="flex items-center justify-center gap-2 py-8 text-xs text-slate-500">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Loading...
+              </div>
+            ) : (
+              <>
+                {/* Desktop table */}
+                <div className="hidden sm:block overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 bg-slate-950/50">
+                        <th className="px-3 py-2 text-left font-semibold text-slate-400 whitespace-nowrap">Status</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-400 whitespace-nowrap">Employee</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-400 whitespace-nowrap">Contact</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-400 whitespace-nowrap">Category</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-400 whitespace-nowrap">Missed At</th>
+                        <th className="px-3 py-2 text-left font-semibold text-slate-400 whitespace-nowrap">Callback At</th>
+                        <th className="px-3 py-2 text-right font-semibold text-slate-400 whitespace-nowrap">Total Calls</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {completionRows.map((row) => {
+                        const catChip =
+                          row.category === "New Client"      ? "bg-amber-500/15 text-amber-300 border-amber-500/30" :
+                          row.category === "Existing Client" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" :
+                          row.category === "personal"        ? "bg-purple-500/15 text-purple-300 border-purple-500/30" :
+                          row.category === "staff"           ? "bg-sky-500/15 text-sky-300 border-sky-500/30" :
+                          row.category === "courier"         ? "bg-orange-500/15 text-orange-300 border-orange-500/30" :
+                          "bg-slate-700/30 text-slate-400 border-slate-700";
+                        return (
+                          <tr key={row.id} className="hover:bg-slate-800/40 transition-colors">
+                            {/* Status */}
+                            <td className="px-3 py-2.5 whitespace-nowrap">
+                              {row.completed ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 px-2 py-0.5 text-[10px] font-semibold">
+                                  <CheckCircle2 className="h-3 w-3" />
+                                  Called back
+                                  {row.callbackAt && (
+                                    <span className="opacity-70 font-normal">· {formatCallbackGap(row.missedAt, row.callbackAt)}</span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 border border-rose-500/25 text-rose-300 px-2 py-0.5 text-[10px] font-semibold">
+                                  <XCircle className="h-3 w-3" />
+                                  Not called back
+                                </span>
+                              )}
+                            </td>
+                            {/* Employee */}
+                            <td className="px-3 py-2.5 font-medium text-slate-300 whitespace-nowrap">{row.employee}</td>
+                            {/* Contact */}
+                            <td className="px-3 py-2.5 whitespace-nowrap">
+                              <div className="flex flex-col gap-0.5">
+                                {row.contactName ? (
+                                  <span className="text-slate-200 font-medium">{row.contactName}</span>
+                                ) : null}
+                                <span className={cn("font-mono", row.contactName ? "text-slate-500 text-[10px]" : "text-slate-300")}>{row.phoneNumber}</span>
+                              </div>
+                            </td>
+                            {/* Category */}
+                            <td className="px-3 py-2.5 whitespace-nowrap">
+                              <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium", catChip)}>
+                                {row.category || "Unknown"}
+                              </span>
+                            </td>
+                            {/* Missed At */}
+                            <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap tabular-nums">
+                              {format(new Date(row.missedAt), "MMM d, HH:mm")}
+                            </td>
+                            {/* Callback At */}
+                            <td className="px-3 py-2.5 whitespace-nowrap tabular-nums">
+                              {row.callbackAt ? (
+                                <span className="text-emerald-400">{format(new Date(row.callbackAt), "MMM d, HH:mm")}</span>
+                              ) : (
+                                <span className="text-slate-600">—</span>
+                              )}
+                            </td>
+                            {/* Total calls */}
+                            <td className="px-3 py-2.5 text-right text-slate-400 tabular-nums">{row.totalCalls}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile card list */}
+                <div className="block sm:hidden divide-y divide-slate-800/60">
+                  {completionRows.map((row) => {
+                    const catChip =
+                      row.category === "New Client"      ? "bg-amber-500/15 text-amber-300 border-amber-500/30" :
+                      row.category === "Existing Client" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" :
+                      row.category === "personal"        ? "bg-purple-500/15 text-purple-300 border-purple-500/30" :
+                      row.category === "staff"           ? "bg-sky-500/15 text-sky-300 border-sky-500/30" :
+                      row.category === "courier"         ? "bg-orange-500/15 text-orange-300 border-orange-500/30" :
+                      "bg-slate-700/30 text-slate-400 border-slate-700";
+                    return (
+                      <div key={row.id} className="px-3 py-2.5 flex flex-col gap-1.5">
+                        {/* Row 1: employee + status badge */}
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="text-sm font-semibold text-white leading-snug">{row.employee}</span>
+                          {row.completed ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 px-2 py-0.5 text-[10px] font-semibold shrink-0">
+                              <CheckCircle2 className="h-3 w-3" />
+                              Called back
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 border border-rose-500/25 text-rose-300 px-2 py-0.5 text-[10px] font-semibold shrink-0">
+                              <XCircle className="h-3 w-3" />
+                              Not called back
+                            </span>
+                          )}
+                        </div>
+                        {/* Row 2: contact + phone */}
+                        <div className="flex items-center gap-1.5 text-xs">
+                          {row.contactName && <span className="text-slate-200 font-medium">{row.contactName}</span>}
+                          {row.contactName && <span className="text-slate-600">·</span>}
+                          <span className="font-mono text-slate-400">{row.phoneNumber}</span>
+                        </div>
+                        {/* Row 3: category + call count */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium", catChip)}>
+                            {row.category || "Unknown"}
+                          </span>
+                          <span className="text-[11px] text-slate-500">{row.totalCalls} calls total</span>
+                        </div>
+                        {/* Row 4: timestamps */}
+                        <div className="flex items-center gap-2 text-[11px]">
+                          <span className="text-slate-500">Missed</span>
+                          <span className="text-slate-300 tabular-nums">{format(new Date(row.missedAt), "MMM d, HH:mm")}</span>
+                          {row.callbackAt && (
+                            <>
+                              <span className="text-slate-600">→</span>
+                              <span className="text-slate-500">Callback</span>
+                              <span className="text-emerald-400 tabular-nums">{format(new Date(row.callbackAt), "MMM d, HH:mm")}</span>
+                              <span className="text-slate-600 font-medium">({formatCallbackGap(row.missedAt, row.callbackAt)})</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Footer count */}
+                <div className="px-4 py-2.5 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-500">
+                  <span>
+                    <span className="text-slate-300 font-medium">{completionRows.length}</span> missed call{completionRows.length !== 1 ? "s" : ""}{" "}
+                    · <span className="text-emerald-300 font-medium">{completionRows.filter(r => r.completed).length}</span> called back
+                    · <span className="text-rose-300 font-medium">{completionRows.filter(r => !r.completed).length}</span> not called back
+                  </span>
+                  <span className="text-slate-600 hidden sm:inline">2h window</span>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
       </div>
       )}
 
@@ -2748,7 +3431,7 @@ export default function CallLogsPage() {
                 </div>
                 <div>
                   <h2 className="text-lg font-bold text-white">Probable Clients</h2>
-                  <p className="text-xs text-slate-400 mt-0.5">Contacts with no name who have called 5 or more times</p>
+                  <p className="text-xs text-slate-400 mt-0.5">All contacts with no name · sorted by call count</p>
                 </div>
               </div>
               <button 
@@ -2774,9 +3457,9 @@ export default function CallLogsPage() {
                   <TableHeader className="bg-slate-900/50 sticky top-0 z-10">
                     <TableRow className="border-slate-800 hover:bg-transparent">
                       <TableHead className="text-slate-400 font-semibold h-10">Phone Number</TableHead>
-                      <TableHead className="text-slate-400 font-semibold h-10 text-center">Total Calls</TableHead>
+                      <TableHead className="text-slate-400 font-semibold h-10 text-center">Calls</TableHead>
                       <TableHead className="text-slate-400 font-semibold h-10">Employees</TableHead>
-                      <TableHead className="text-slate-400 font-semibold h-10 text-right">Most Recent Call</TableHead>
+                      <TableHead className="text-slate-400 font-semibold h-10">Call Times</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -2800,10 +3483,17 @@ export default function CallLogsPage() {
                             {client.employeeNames.length > 0 ? client.employeeNames.join(", ") : "—"}
                           </div>
                         </TableCell>
-                        <TableCell className="text-right py-3">
-                          <span className="text-xs text-slate-300 font-mono">
-                            {client.timestamps.length > 0 ? format(new Date(client.timestamps[0]), "MMM d, h:mm a") : "—"}
-                          </span>
+                        <TableCell className="py-3">
+                          <div className="flex flex-col gap-0.5 max-h-[80px] overflow-y-auto pr-1">
+                            {client.timestamps.slice(0, 8).map((ts, tIdx) => (
+                              <span key={tIdx} className="text-[11px] text-slate-300 font-mono whitespace-nowrap">
+                                {format(new Date(ts), "MMM d, h:mm a")}
+                              </span>
+                            ))}
+                            {client.timestamps.length > 8 && (
+                              <span className="text-[10px] text-slate-500">+{client.timestamps.length - 8} more</span>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
