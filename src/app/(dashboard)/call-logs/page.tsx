@@ -52,6 +52,120 @@ const GraphSkeleton = () => (
 
 const CATEGORY_LIST = ["personal", "staff", "New Client", "Existing Client", "courier"] as const;
 
+const CATEGORY_COLORS_MAP: Record<string, string> = {
+  personal: "bg-purple-500/15 text-purple-300 border-purple-500/30",
+  staff: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  "Existing Client": "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  "New Client": "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  courier: "bg-orange-500/15 text-orange-300 border-orange-500/30",
+};
+
+const CATEGORY_OPTIONS_LIST = ["personal", "staff", "New Client", "Existing Client", "courier"] as const;
+
+function IdentifiedTag({
+  log,
+  getEmployeeName,
+  intelligenceTags,
+  savingEdit,
+  saveInlineEdit,
+}: {
+  log: any;
+  getEmployeeName: (log: any) => string;
+  intelligenceTags: Record<string, { category?: string; contactName?: string }>;
+  savingEdit: string | null;
+  saveInlineEdit: (phoneNumber: string, employeeName: string, field: "contactName" | "category", value: string) => void;
+}) {
+  const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
+  const normalized = last10(normalizePhoneNumber(String(log.phoneNumber ?? ""))) || last10(String(log.phoneNumber ?? ""));
+  const emp = getEmployeeName(log);
+  const key = `${normalized}|${emp}`;
+  const tag = intelligenceTags[key] ?? {};
+  const isSaving = savingEdit === key;
+
+  const [editingField, setEditingField] = useState<"contactName" | "category" | null>(null);
+  const [localValue, setLocalValue] = useState("");
+
+  const startEdit = (field: "contactName" | "category", current: string) => {
+    setEditingField(field);
+    setLocalValue(current);
+  };
+
+  const commitEdit = () => {
+    if (!editingField) return;
+    saveInlineEdit(log.phoneNumber, emp, editingField, localValue);
+    setEditingField(null);
+  };
+
+  const cancelEdit = () => setEditingField(null);
+
+  return (
+    <div className="flex flex-wrap gap-1 items-center min-w-[120px]">
+      {/* Category chip — click to edit */}
+      {editingField === "category" ? (
+        <div className="flex items-center gap-1">
+          <select
+            autoFocus
+            value={localValue}
+            onChange={e => setLocalValue(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={e => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }}
+            className="text-[11px] rounded border border-indigo-500/60 bg-slate-800 text-slate-100 px-1.5 py-0.5 outline-none"
+          >
+            <option value="">— none —</option>
+            {CATEGORY_OPTIONS_LIST.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <button type="button" onClick={commitEdit} className="text-indigo-400 hover:text-indigo-300"><Check className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={cancelEdit} className="text-slate-500 hover:text-slate-300"><X className="h-3.5 w-3.5" /></button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => startEdit("category", tag.category ?? "")}
+          title="Click to edit category"
+          className={cn(
+            "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors group",
+            tag.category
+              ? CATEGORY_COLORS_MAP[tag.category] ?? "bg-slate-700 text-slate-300 border-slate-600"
+              : "border-dashed border-slate-700 text-slate-600 hover:border-slate-500 hover:text-slate-400"
+          )}
+        >
+          {tag.category ?? "add category"}
+          <Pencil className="h-2.5 w-2.5 opacity-0 group-hover:opacity-60 transition-opacity" />
+        </button>
+      )}
+
+      {/* Contact name chip — click to edit */}
+      {editingField === "contactName" ? (
+        <div className="flex items-center gap-1">
+          <input
+            autoFocus
+            type="text"
+            value={localValue}
+            onChange={e => setLocalValue(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={e => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }}
+            className="text-[11px] rounded border border-indigo-500/60 bg-slate-800 text-slate-100 px-2 py-0.5 outline-none w-28"
+            placeholder="Contact name"
+          />
+          <button type="button" onClick={commitEdit} className="text-indigo-400 hover:text-indigo-300"><Check className="h-3.5 w-3.5" /></button>
+          <button type="button" onClick={cancelEdit} className="text-slate-500 hover:text-slate-300"><X className="h-3.5 w-3.5" /></button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => startEdit("contactName", tag.contactName ?? "")}
+          title="Click to edit contact name"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border group transition-colors bg-violet-500/15 text-violet-300 border-violet-500/30 hover:bg-violet-500/25"
+        >
+          {isSaving ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : null}
+          {tag.contactName ?? <span className="text-slate-600 italic">add name</span>}
+          <Pencil className="h-2.5 w-2.5 opacity-0 group-hover:opacity-60 transition-opacity" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function CallLogsPage() {
   const [logs, setLogs] = useState<any[]>([]);
   const [tags, setTags] = useState<Record<string, Array<{name: string, savedBy: any[]}>>>({});
@@ -64,6 +178,8 @@ export default function CallLogsPage() {
   const [dateFilter, setDateFilter] = useState<"ALL" | "TODAY" | "TOMORROW" | "YESTERDAY" | "CUSTOM">("TODAY");
   const [dateRange, setDateRange] = useState<DateRange | undefined>();
   const [selectedEmployee, setSelectedEmployee] = useState<string>("ALL");
+  const [selectedDepartment, setSelectedDepartment] = useState<string>("Marketing");
+  const [departments, setDepartments] = useState<Array<{ _id: string; name: string }>>([]);
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
   const [selectedPhoneForTags, setSelectedPhoneForTags] = useState<string | null>(null);
   const [isFetchingTags, setIsFetchingTags] = useState(false);
@@ -94,8 +210,6 @@ export default function CallLogsPage() {
   const [insightsExpanded, setInsightsExpanded] = useState(true);
   const [insightsLimit, setInsightsLimit] = useState(3);
   // Inline edit state: key = "phoneNorm|employeeName", value = { contactName, category }
-  const [editingCell, setEditingCell] = useState<{ key: string; field: "contactName" | "category" } | null>(null);
-  const [editingValue, setEditingValue] = useState<string>("");
   const [savingEdit, setSavingEdit] = useState<string | null>(null); // key being saved
   const logsCacheRef = useRef<Map<string, { logs: any[]; totalCount: number }>>(new Map());
   const latestFetchKeyRef = useRef<string>("");
@@ -129,6 +243,15 @@ export default function CallLogsPage() {
     return () => mq.removeEventListener("change", set);
   }, []);
 
+  useEffect(() => {
+    fetch("/api/departments")
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data)) setDepartments(data);
+      })
+      .catch(() => {});
+  }, []);
+
   // When in compare mode and employees load, default to all selected if none selected yet
   const employeeNames = useMemo(() => {
     const names = new Set<string>();
@@ -138,6 +261,24 @@ export default function CallLogsPage() {
     });
     return Array.from(names).sort();
   }, [logs]);
+
+  // Employees filtered to those belonging to the selected department
+  const employeeNamesForDept = useMemo(() => {
+    if (selectedDepartment === "ALL") return employeeNames;
+    const deptLower = selectedDepartment.toLowerCase();
+    return employeeNames.filter((name) =>
+      logs.some((log) => {
+        const empName = log.employeeName || log.driverId?.userId?.name || "Unknown";
+        const dept = log.driverId?.userId?.departmentId?.name || log.employeeDepartment?.departmentName || "";
+        return empName === name && dept.toLowerCase() === deptLower;
+      })
+    );
+  }, [employeeNames, logs, selectedDepartment]);
+
+  // Reset selected employee when department changes
+  useEffect(() => {
+    setSelectedEmployee("ALL");
+  }, [selectedDepartment]);
 
   useEffect(() => {
     if (comparisonMode && selectedCompareEmployees.length === 0 && employeeNames.length > 0) {
@@ -467,12 +608,15 @@ export default function CallLogsPage() {
             .includes(qLower));
       const matchesEmployee =
         selectedEmployee === "ALL" || getEmployeeName(log) === selectedEmployee;
+      const matchesDepartment =
+        selectedDepartment === "ALL" ||
+        getEmployeeDepartment(log).toLowerCase() === selectedDepartment.toLowerCase();
       const durationSec = Number(log.duration) || 0;
       const keepByDuration = !hideShortCalls || log.callType === "MISSED" || durationSec >= 10;
       const keepByMissed = !hideMissedCalls || log.callType !== "MISSED";
-      return matchesSearch && matchesEmployee && keepByDuration && keepByMissed;
+      return matchesSearch && matchesEmployee && matchesDepartment && keepByDuration && keepByMissed;
     });
-  }, [logs, searchQuery, selectedEmployee, hideShortCalls, hideMissedCalls, intelligenceTags, tags, activeDateBounds]);
+  }, [logs, searchQuery, selectedEmployee, selectedDepartment, hideShortCalls, hideMissedCalls, intelligenceTags, tags, activeDateBounds]);
 
   // Deduplicate logs introduced by an old Android app bug
   const dedupedFilteredLogs = useMemo(() => {
@@ -621,120 +765,11 @@ export default function CallLogsPage() {
     return null;
   };
 
-  const CATEGORY_COLORS: Record<string, string> = {
-    personal: "bg-purple-500/15 text-purple-300 border-purple-500/30",
-    staff: "bg-sky-500/15 text-sky-300 border-sky-500/30",
-    "Existing Client": "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-    "New Client": "bg-amber-500/15 text-amber-300 border-amber-500/30",
-    courier: "bg-orange-500/15 text-orange-300 border-orange-500/30",
-  };
+  const CATEGORY_COLORS = CATEGORY_COLORS_MAP;
 
   const categoryOptions = useMemo(() => {
     return ["ALL", "personal", "staff", "New Client", "Existing Client", "courier"];
   }, []);
-
-  const CATEGORY_OPTIONS = ["personal", "staff", "New Client", "Existing Client", "courier"] as const;
-
-  const IdentifiedTag = ({
-    log,
-    getEmployeeName,
-    intelligenceTags,
-  }: {
-    log: any;
-    getEmployeeName: (log: any) => string;
-    intelligenceTags: Record<string, { category?: string; contactName?: string }>;
-  }) => {
-    const last10 = (phone: string) => String(phone ?? "").replace(/\D/g, "").slice(-10);
-    const normalized = last10(normalizePhoneNumber(String(log.phoneNumber ?? ""))) || last10(String(log.phoneNumber ?? ""));
-    const emp = getEmployeeName(log);
-    const key = `${normalized}|${emp}`;
-    const tag = intelligenceTags[key] ?? {};
-    const isSaving = savingEdit === key;
-
-    const startEdit = (field: "contactName" | "category", current: string) => {
-      setEditingCell({ key, field });
-      setEditingValue(current);
-    };
-
-    const commitEdit = () => {
-      if (!editingCell || editingCell.key !== key) return;
-      saveInlineEdit(log.phoneNumber, emp, editingCell.field, editingValue);
-    };
-
-    const cancelEdit = () => {
-      if (editingCell?.key === key) setEditingCell(null);
-    };
-
-    const isEditingName = editingCell?.key === key && editingCell.field === "contactName";
-    const isEditingCat  = editingCell?.key === key && editingCell.field === "category";
-
-    return (
-      <div className="flex flex-wrap gap-1 items-center min-w-[120px]">
-        {/* Category chip — click to cycle / edit */}
-        {isEditingCat ? (
-          <div className="flex items-center gap-1">
-            <select
-              autoFocus
-              value={editingValue}
-              onChange={e => setEditingValue(e.target.value)}
-              onBlur={commitEdit}
-              onKeyDown={e => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }}
-              className="text-[11px] rounded border border-indigo-500/60 bg-slate-800 text-slate-100 px-1.5 py-0.5 outline-none"
-            >
-              <option value="">— none —</option>
-              {CATEGORY_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <button type="button" onClick={commitEdit} className="text-indigo-400 hover:text-indigo-300"><Check className="h-3.5 w-3.5" /></button>
-            <button type="button" onClick={cancelEdit} className="text-slate-500 hover:text-slate-300"><X className="h-3.5 w-3.5" /></button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => startEdit("category", tag.category ?? "")}
-            title="Click to edit category"
-            className={cn(
-              "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border transition-colors group",
-              tag.category
-                ? CATEGORY_COLORS[tag.category] ?? "bg-slate-700 text-slate-300 border-slate-600"
-                : "border-dashed border-slate-700 text-slate-600 hover:border-slate-500 hover:text-slate-400"
-            )}
-          >
-            {tag.category ?? "add category"}
-            <Pencil className="h-2.5 w-2.5 opacity-0 group-hover:opacity-60 transition-opacity" />
-          </button>
-        )}
-
-        {/* Contact name chip — click to edit */}
-        {isEditingName ? (
-          <div className="flex items-center gap-1">
-            <input
-              autoFocus
-              type="text"
-              value={editingValue}
-              onChange={e => setEditingValue(e.target.value)}
-              onBlur={commitEdit}
-              onKeyDown={e => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") cancelEdit(); }}
-              className="text-[11px] rounded border border-indigo-500/60 bg-slate-800 text-slate-100 px-2 py-0.5 outline-none w-28"
-              placeholder="Contact name"
-            />
-            <button type="button" onClick={commitEdit} className="text-indigo-400 hover:text-indigo-300"><Check className="h-3.5 w-3.5" /></button>
-            <button type="button" onClick={cancelEdit} className="text-slate-500 hover:text-slate-300"><X className="h-3.5 w-3.5" /></button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => startEdit("contactName", tag.contactName ?? "")}
-            title="Click to edit contact name"
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border group transition-colors bg-violet-500/15 text-violet-300 border-violet-500/30 hover:bg-violet-500/25"
-          >
-            {isSaving ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : null}
-            {tag.contactName ?? <span className="text-slate-600 italic">add name</span>}
-            <Pencil className="h-2.5 w-2.5 opacity-0 group-hover:opacity-60 transition-opacity" />
-          </button>
-        )}
-      </div>
-    );
-  };
 
   const timeBuckets = useMemo(() => {
     const labels = [];
@@ -1152,7 +1187,6 @@ export default function CallLogsPage() {
       }
     } finally {
       setSavingEdit(null);
-      setEditingCell(null);
     }
   }, []);
 
@@ -1811,13 +1845,13 @@ export default function CallLogsPage() {
             >
               All Employees
             </button>
-            {employeeNames.length === 0 && isLoading ? (
+            {employeeNamesForDept.length === 0 && isLoading ? (
               <div className="flex items-center gap-2 px-3 py-1.5">
                 <Loader2 className="h-3 w-3 animate-spin text-slate-500" />
                 <span className="text-xs text-slate-500">Loading...</span>
               </div>
             ) : (
-              employeeNames.map((name) => (
+              employeeNamesForDept.map((name) => (
                 <button
                   key={name}
                   onClick={() => {
@@ -1845,19 +1879,34 @@ export default function CallLogsPage() {
           </div>
         </div>
 
-        {/* Category Filter */}
+        {/* Category Filter + Department Dropdown */}
         <div ref={categoryFilterRef} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-medium text-slate-400">Category</span>
-            {categoryFilter !== "ALL" && (
-              <button
-                type="button"
-                onClick={() => setCategoryFilter("ALL")}
-                className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 transition-colors"
+            <div className="flex items-center gap-2">
+              {/* Department Dropdown */}
+              <select
+                value={selectedDepartment}
+                onChange={(e) => setSelectedDepartment(e.target.value)}
+                className="text-xs bg-slate-800 border border-slate-700 text-slate-300 rounded-lg px-2.5 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 cursor-pointer"
               >
-                Clear
-              </button>
-            )}
+                <option value="ALL">All Departments</option>
+                {departments.map((dept) => (
+                  <option key={dept._id} value={dept.name}>
+                    {dept.name}
+                  </option>
+                ))}
+              </select>
+              {categoryFilter !== "ALL" && (
+                <button
+                  type="button"
+                  onClick={() => setCategoryFilter("ALL")}
+                  className="text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             {categoryOptions.map((cat) => {
@@ -3205,7 +3254,13 @@ export default function CallLogsPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-slate-400">
-                      <IdentifiedTag log={log} getEmployeeName={getEmployeeName} intelligenceTags={intelligenceTags} />
+                      <IdentifiedTag
+                        log={log}
+                        getEmployeeName={getEmployeeName}
+                        intelligenceTags={intelligenceTags}
+                        savingEdit={savingEdit}
+                        saveInlineEdit={saveInlineEdit}
+                      />
                     </TableCell>
                     <TableCell className="text-slate-300 font-mono text-sm">
                       {log.phoneNumber}
