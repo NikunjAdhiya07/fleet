@@ -2,7 +2,7 @@
 
 import { AdvancedMarker, InfoWindow } from "@vis.gl/react-google-maps";
 import { useState, type ReactNode } from "react";
-import { Loader2, Navigation, Radio, Satellite, StopCircle, Zap, ZapOff } from "lucide-react";
+import { AlertTriangle, Loader2, Navigation, Radio, Satellite, StopCircle, Zap, ZapOff } from "lucide-react";
 import { vehicleLabel } from "@/lib/vehicleLabel";
 import MapShell from "@/components/maps/MapShell";
 import { Circle, FitBounds, PanTo, Polyline, type LatLng } from "@/components/maps/overlays";
@@ -52,6 +52,8 @@ interface Props {
   onSelectDevice?: (deviceId: string) => void;
   onCommand?: (deviceId: string, type: LocationCommand) => void;
   commandStates?: Record<string, boolean>;
+  /** Devices whose last fix-and-upload command expired without a GPS fix. */
+  notRespondingDeviceIds?: string[];
   focusPoint?: { lat: number; lng: number } | null;
 }
 
@@ -128,6 +130,7 @@ export default function FleetMapCore({
   onSelectDevice,
   onCommand,
   commandStates = {},
+  notRespondingDeviceIds = [],
   focusPoint = null,
 }: Props) {
   // Which marker / trail-start has its InfoWindow open. Google Maps has no
@@ -152,6 +155,7 @@ export default function FleetMapCore({
     });
 
   const isCmd = (deviceId: string, type: string) => !!commandStates[`${deviceId}:${type}`];
+  const notResponding = new Set(notRespondingDeviceIds);
 
   return (
     <MapShell defaultCenter={center} defaultZoom={devices.length ? 13 : 5}>
@@ -264,6 +268,16 @@ export default function FleetMapCore({
                       </p>
                     )}
                   </div>
+                  {notResponding.has(d.deviceId) && (
+                    <p className="flex gap-1 rounded bg-amber-50 p-1.5 text-[11px] leading-snug text-amber-900">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-600" />
+                      <span>
+                        <span className="font-semibold">Not responding</span> — last location
+                        request expired with no GPS fix. Check the phone’s location permission
+                        and battery settings.
+                      </span>
+                    </p>
+                  )}
                   {onCommand && (
                     <div className="flex flex-wrap gap-1.5 border-t border-slate-100 pt-2">
                       <CmdButton

@@ -17,6 +17,7 @@ import {
   List,
   Zap,
   ZapOff,
+  AlertTriangle,
 } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useSidebar } from "@/components/layout/SidebarContext";
@@ -27,6 +28,21 @@ const FleetMapCore = dynamic(() => import("./FleetMapCore"), { ssr: false });
 
 const TRACK_WINDOW_MINUTES = 30;
 const REFRESH_MS = 5000;
+const COMMAND_WINDOW_MINUTES = 60;
+
+/** Commands that need an actual GPS fix + upload from the phone to complete. */
+const FIX_COMMANDS = ["location_latest", "location_upload"];
+const PENDING_STATUSES = ["REQUESTED", "DELIVERED", "UPLOADING"];
+
+interface CommandRecord {
+  _id: string;
+  deviceId: string;
+  type: string;
+  status: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 interface DeviceState {
   _id: string;
@@ -58,6 +74,7 @@ export default function FleetMapPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [followFleet, setFollowFleet] = useState(true);
   const [commandStates, setCommandStates] = useState<Record<string, boolean>>({});
+  const [commands, setCommands] = useState<CommandRecord[]>([]);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
@@ -68,14 +85,19 @@ export default function FleetMapPage() {
 
   const fetchDevices = useCallback(async () => {
     try {
-      const [statesRes, tracksRes] = await Promise.all([
+      const [statesRes, tracksRes, cmdRes] = await Promise.all([
         fetch("/api/fleet-map"),
         fetch(`/api/fleet-map/tracks?minutes=${TRACK_WINDOW_MINUTES}`),
+        fetch(`/api/location/request?minutes=${COMMAND_WINDOW_MINUTES}`),
       ]);
       if (statesRes.ok) setDevices(await statesRes.json());
       if (tracksRes.ok) {
         const data = await tracksRes.json();
         setTracks(data.tracks || []);
+      }
+      if (cmdRes.ok) {
+        const data = await cmdRes.json();
+        setCommands(data.commands || []);
       }
     } catch {
       /* ignore */
@@ -138,6 +160,38 @@ export default function FleetMapPage() {
     [devices]
   );
 
+  // Commands the device still owes us an answer for — the server expires these
+  // after ~10 min, so a spinner here always resolves one way or the other.
+  const serverPending = useMemo(() => {
+    const keys = new Set<string>();
+    for (const c of commands) {
+      if (PENDING_STATUSES.includes(c.status)) keys.add(`${c.deviceId}:${c.type}`);
+    }
+    return keys;
+  }, [commands]);
+
+  /**
+   * A device is "not responding" when its most recent fix-and-upload command
+   * expired without ever completing — the app is reachable (control commands
+   * still ack) but it cannot produce a GPS fix. That is a phone-side problem:
+   * location permission, GPS off, or battery restrictions.
+   */
+  const notResponding = useMemo(() => {
+    const latestByDevice = new Map<string, CommandRecord>();
+    for (const c of commands) {
+      if (!FIX_COMMANDS.includes(c.type)) continue;
+      const prev = latestByDevice.get(c.deviceId);
+      if (!prev || new Date(c.createdAt) > new Date(prev.createdAt)) {
+        latestByDevice.set(c.deviceId, c);
+      }
+    }
+    const map = new Map<string, CommandRecord>();
+    for (const [deviceId, c] of latestByDevice) {
+      if (c.status === "EXPIRED" || c.status === "FAILED") map.set(deviceId, c);
+    }
+    return map;
+  }, [commands]);
+
   const selected = devices.find((d) => d.deviceId === selectedDeviceId) || null;
   const selectedPlate = vehicleLabel(selected?.vehicle);
 
@@ -163,7 +217,18 @@ export default function FleetMapPage() {
     setFocusPoint(null);
   };
 
-  const isCmd = (deviceId: string, type: string) => !!commandStates[`${deviceId}:${type}`];
+  const isCmd = (deviceId: string, type: string) => {
+    const key = `${deviceId}:${type}`;
+    return !!commandStates[key] || serverPending.has(key);
+  };
+
+  const busyStates = useMemo(() => {
+    const merged: Record<string, boolean> = { ...commandStates };
+    for (const key of serverPending) merged[key] = true;
+    return merged;
+  }, [commandStates, serverPending]);
+
+  const selectedAlert = selected ? notResponding.get(selected.deviceId) : undefined;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-slate-200">
@@ -174,7 +239,8 @@ export default function FleetMapPage() {
         selectedDeviceId={selectedDeviceId}
         onSelectDevice={focusDevice}
         onCommand={sendCommand}
-        commandStates={commandStates}
+        commandStates={busyStates}
+        notRespondingDeviceIds={[...notResponding.keys()]}
         focusPoint={focusPoint}
       />
 
@@ -322,6 +388,19 @@ export default function FleetMapPage() {
                 </span>
               )}
             </div>
+
+            {selectedAlert && (
+              <div className="mt-2 flex gap-2 rounded-lg bg-amber-50 p-2 text-[11px] text-amber-900">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                <span>
+                  <span className="font-semibold">Device not responding.</span> The last{" "}
+                  {selectedAlert.type === "location_upload" ? "Upload" : "Latest"} request (
+                  {new Date(selectedAlert.createdAt).toLocaleTimeString()}) never returned a
+                  fix. Check the phone: Location on, app permission set to “Allow all the
+                  time”, and battery optimisation off.
+                </span>
+              </div>
+            )}
 
             <div className="mt-3 grid grid-cols-3 gap-1.5">
               <ActionBtn
