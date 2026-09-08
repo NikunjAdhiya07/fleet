@@ -58,6 +58,8 @@ interface DeviceState {
   batteryPercent?: number;
   freshness: "fresh" | "stale" | "old" | "unavailable";
   ageMinutes: number | null;
+  /** Why this device is not recording, straight from the phone's heartbeat. */
+  blockedReason?: string | null;
 }
 
 const freshnessMeta = {
@@ -330,6 +332,11 @@ export default function FleetMapPage() {
                             ? `${d.latestCoordinates.lat.toFixed(4)}, ${d.latestCoordinates.lng.toFixed(4)}`
                             : "No location"}
                         </span>
+                        {d.blockedReason && (
+                          <span className="mt-0.5 block truncate text-xs font-medium text-rose-600">
+                            {d.blockedReason}
+                          </span>
+                        )}
                       </span>
                       <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${meta.chip}`}>
                         {meta.label}
@@ -389,7 +396,18 @@ export default function FleetMapPage() {
               )}
             </div>
 
-            {selectedAlert && (
+            {/* The phone's own reason beats our guess from a timed-out command,
+                so it takes precedence when the heartbeat gives us one. */}
+            {selected.blockedReason ? (
+              <div className="mt-2 flex gap-2 rounded-lg bg-rose-50 p-2 text-[11px] text-rose-900">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" />
+                <span>
+                  <span className="font-semibold">Not recording.</span>{" "}
+                  {selected.blockedReason}. The app resumes on its own as soon as this is
+                  fixed on the phone — no need to press Start.
+                </span>
+              </div>
+            ) : selectedAlert ? (
               <div className="mt-2 flex gap-2 rounded-lg bg-amber-50 p-2 text-[11px] text-amber-900">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
                 <span>
@@ -400,7 +418,7 @@ export default function FleetMapPage() {
                   time”, and battery optimisation off.
                 </span>
               </div>
-            )}
+            ) : null}
 
             <div className="mt-3 grid grid-cols-3 gap-1.5">
               <ActionBtn
