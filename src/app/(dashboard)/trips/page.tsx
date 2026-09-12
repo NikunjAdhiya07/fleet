@@ -75,6 +75,9 @@ interface LocationPoint {
   batteryPercent?: number;
   provider?: string;
   isMockLocation?: boolean;
+  /** Road geometry filled in between two fixes, not a surveyed sample. */
+  isInterpolated?: boolean;
+  isRoadSnapped?: boolean;
 }
 
 interface FleetDevice {
@@ -456,17 +459,21 @@ export default function RouteHistoryPage() {
   const exportCsv = () => {
     if (displayedPoints.length === 0) return;
     const header = "sequence,recordedAt,latitude,longitude,speed_kmh,battery_percent,accuracy_m";
-    const rows = displayedPoints.map((p) =>
-      [
-        p.sequenceNumber,
-        new Date(p.recordedAt).toISOString(),
-        p.latitude,
-        p.longitude,
-        p.speedMetersPerSecond != null ? (p.speedMetersPerSecond * 3.6).toFixed(1) : "",
-        p.batteryPercent ?? "",
-        p.accuracyMeters ?? "",
-      ].join(",")
-    );
+    // Road-geometry fillers exist to draw the route, not to be reported as
+    // readings, so the export stays a list of what the device actually logged.
+    const rows = displayedPoints
+      .filter((p) => !p.isInterpolated)
+      .map((p) =>
+        [
+          p.sequenceNumber,
+          new Date(p.recordedAt).toISOString(),
+          p.latitude,
+          p.longitude,
+          p.speedMetersPerSecond != null ? (p.speedMetersPerSecond * 3.6).toFixed(1) : "",
+          p.batteryPercent ?? "",
+          p.accuracyMeters ?? "",
+        ].join(",")
+      );
     const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -522,7 +529,7 @@ export default function RouteHistoryPage() {
       const to = (e.endIdx / (n - 1)) * 100;
       if (to <= at) continue;
       stops.push(`transparent ${at}%`, `transparent ${Math.max(at, from)}%`);
-      stops.push(`#93c5fd ${Math.max(at, from)}%`, `#93c5fd ${to}%`);
+      stops.push(`#d8b4fe ${Math.max(at, from)}%`, `#d8b4fe ${to}%`);
       at = to;
     }
     if (stops.length === 0) return undefined;
@@ -546,7 +553,7 @@ export default function RouteHistoryPage() {
       case "end":
         return <Flag className="h-3.5 w-3.5 text-rose-500" />;
       case "idle":
-        return <PauseCircle className="h-3.5 w-3.5 text-blue-500" />;
+        return <PauseCircle className="h-3.5 w-3.5 text-purple-500" />;
       case "violation":
         return <AlertTriangle className="h-3.5 w-3.5 text-rose-600" />;
       case "max":
@@ -1014,7 +1021,7 @@ export default function RouteHistoryPage() {
             <div className="hidden shrink-0 items-center gap-1.5 sm:flex">
               <span
                 className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold tabular-nums ${
-                  activeIdle ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-500"
+                  activeIdle ? "bg-purple-100 text-purple-700" : "bg-slate-100 text-slate-500"
                 }`}
                 title={
                   activeIdle

@@ -53,46 +53,52 @@ export async function GET() {
 
     const now = Date.now();
     const enriched = states.map((s: any) => {
-      // Prefer GPS fix time over upload/heartbeat time so "Live" means the pin moved recently.
-      const fixMs = s.lastRecordedAt
-        ? new Date(s.lastRecordedAt).getTime()
-        : s.lastReceivedAt
-          ? new Date(s.lastReceivedAt).getTime()
-          : null;
+      // Two separate clocks, deliberately. The GPS fix time says when the
+      // vehicle last moved; the heartbeat says when we last heard from the
+      // phone at all. Collapsing them is what let a parked vehicle read as
+      // "Live" — the app used to store an invented fix every five minutes just
+      // to keep this number moving. It no longer does, so a stopped vehicle has
+      // a stale fix time and a fresh heartbeat, and that pair is what tells
+      // "parked" apart from "we have lost this device".
+      const fixMs = s.lastRecordedAt ? new Date(s.lastRecordedAt).getTime() : null;
+      const heardMs = s.lastReceivedAt ? new Date(s.lastReceivedAt).getTime() : null;
       const ageMinutes = fixMs != null ? (now - fixMs) / 60000 : null;
-      let freshness: "fresh" | "stale" | "old" | "unavailable" = "unavailable";
-      if (ageMinutes !== null) {
-        if (ageMinutes < 3) freshness = "fresh";
-        else if (ageMinutes < 15) freshness = "stale";
-        else freshness = "old";
+      const heardMinutes = heardMs != null ? (now - heardMs) / 60000 : null;
+      const reason = blockedReason(s);
+
+      let freshness: "fresh" | "parked" | "stale" | "old" | "unavailable" = "unavailable";
+      if (ageMinutes !== null && ageMinutes < 3) {
+        freshness = "fresh";
+      } else if (!reason && heardMinutes !== null && heardMinutes < 15) {
+        // Phone is reporting in, the wheels just are not turning.
+        freshness = "parked";
+      } else if (ageMinutes !== null && ageMinutes < 15) {
+        freshness = "stale";
+      } else if (ageMinutes !== null || heardMinutes !== null) {
+        freshness = "old";
       }
       return {
         ...s,
         // Always a string (or undefined) — never the raw { id, registration } object.
         vehicle: vehicleLabel(s.vehicle),
         ageMinutes,
+        heardMinutes,
         freshness,
         // The device now heartbeats its real capability state, so a stale pin
         // can say *why* it is stale instead of leaving the operator to guess
         // between "parked", "no signal" and "location switched off".
-        blockedReason: blockedReason(s),
+        blockedReason: reason,
       };
     });
 
-    // Newest GPS fix first so active devices surface at the top of pickers.
-    enriched.sort((a: any, b: any) => {
-      const am = a.lastRecordedAt
-        ? new Date(a.lastRecordedAt).getTime()
-        : a.lastReceivedAt
-          ? new Date(a.lastReceivedAt).getTime()
-          : 0;
-      const bm = b.lastRecordedAt
-        ? new Date(b.lastRecordedAt).getTime()
-        : b.lastReceivedAt
-          ? new Date(b.lastReceivedAt).getTime()
-          : 0;
-      return bm - am;
-    });
+    // Most recently heard from first, so a parked-but-healthy device does not
+    // sink below one we lost days ago just because its fix time is older.
+    const lastActivity = (s: any) =>
+      Math.max(
+        s.lastRecordedAt ? new Date(s.lastRecordedAt).getTime() : 0,
+        s.lastReceivedAt ? new Date(s.lastReceivedAt).getTime() : 0
+      );
+    enriched.sort((a: any, b: any) => lastActivity(b) - lastActivity(a));
 
     return NextResponse.json(enriched);
   } catch (error) {

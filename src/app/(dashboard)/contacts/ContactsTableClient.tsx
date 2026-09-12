@@ -35,19 +35,79 @@ function normDigits(v: unknown) {
   return String(v ?? "").replace(/\D+/g, "");
 }
 
+// Same number written as 07698465970 / +917698465970 / 7698465970 must collapse
+// to one key: drop non-digits, then keep the last 10 (subscriber) digits.
+function phoneKey(v: unknown) {
+  const digits = normDigits(v);
+  return digits.length > 10 ? digits.slice(-10) : digits;
+}
+
+type MergedContact = {
+  key: string;
+  contactName: string;
+  phoneNumber: string;
+  sources: ContactBankRow[];
+  lastSyncedAt: string | null;
+};
+
+// One entry per (contact name + phone number), no matter how many employees'
+// devices it was synced from.
+function mergeContacts(contacts: ContactBankRow[]): MergedContact[] {
+  const byKey = new Map<string, MergedContact>();
+
+  for (const c of contacts) {
+    const pKey = phoneKey(c.phoneNumber);
+    const nKey = normText(c.contactName);
+    // Without a phone number there is nothing safe to merge on — keep it separate.
+    const key = pKey ? `${pKey}|${nKey}` : `id:${c.id}`;
+
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, {
+        key,
+        contactName: c.contactName,
+        phoneNumber: c.phoneNumber,
+        sources: [c],
+        lastSyncedAt: c.syncedAt,
+      });
+      continue;
+    }
+
+    existing.sources.push(c);
+    // Prefer the most complete rendering of the number (e.g. +91… over 0…).
+    if (normDigits(c.phoneNumber).length > normDigits(existing.phoneNumber).length) {
+      existing.phoneNumber = c.phoneNumber;
+    }
+    if (c.contactName && !existing.contactName) existing.contactName = c.contactName;
+    if (c.syncedAt && (!existing.lastSyncedAt || c.syncedAt > existing.lastSyncedAt)) {
+      existing.lastSyncedAt = c.syncedAt;
+    }
+  }
+
+  for (const m of byKey.values()) {
+    m.sources.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+  }
+
+  return [...byKey.values()];
+}
+
 export function ContactsTableClient({ contacts }: { contacts: ContactBankRow[] }) {
   const [q, setQ] = useState("");
+
+  const merged = useMemo(() => mergeContacts(contacts), [contacts]);
 
   const filtered = useMemo(() => {
     const nqText = normText(q);
     const nqDigits = normDigits(q);
     const textTokens = nqText ? nqText.split(" ").filter(Boolean) : [];
     const digitTokens = nqDigits ? [nqDigits] : [];
-    if (textTokens.length === 0 && digitTokens.length === 0) return contacts;
+    if (textTokens.length === 0 && digitTokens.length === 0) return merged;
 
-    return contacts.filter((c) => {
-      const hayText = normText(`${c.employeeName} ${c.deviceId} ${c.contactName} ${c.phoneNumber}`);
-      const hayDigits = normDigits(`${c.deviceId} ${c.phoneNumber}`);
+    return merged.filter((c) => {
+      const employees = c.sources.map((s) => `${s.employeeName} ${s.deviceId}`).join(" ");
+      const phones = c.sources.map((s) => s.phoneNumber).join(" ");
+      const hayText = normText(`${employees} ${c.contactName} ${phones}`);
+      const hayDigits = normDigits(`${c.sources.map((s) => s.deviceId).join(" ")} ${phones}`);
 
       // All tokens must match somewhere (more "search-like" than exact phrase match).
       for (const t of textTokens) {
@@ -58,7 +118,7 @@ export function ContactsTableClient({ contacts }: { contacts: ContactBankRow[] }
       }
       return true;
     });
-  }, [contacts, q]);
+  }, [merged, q]);
 
   return (
     <div className="rounded-md border border-slate-800 bg-slate-900 overflow-hidden">
@@ -76,7 +136,10 @@ export function ContactsTableClient({ contacts }: { contacts: ContactBankRow[] }
             </div>
             <div className="text-xs text-slate-500">
               Showing <span className="text-slate-300 font-medium">{filtered.length}</span> of{" "}
-              <span className="text-slate-300 font-medium">{contacts.length}</span>
+              <span className="text-slate-300 font-medium">{merged.length}</span>{" "}
+              {merged.length !== contacts.length ? (
+                <span className="text-slate-600">({contacts.length} synced entries merged)</span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -99,16 +162,33 @@ export function ContactsTableClient({ contacts }: { contacts: ContactBankRow[] }
               </TableRow>
             ) : (
               filtered.map((contact) => (
-                <TableRow key={contact.id} className="border-slate-800 hover:bg-slate-800/50">
-                  <TableCell className="font-medium text-slate-300">
-                    {contact.employeeName}
-                    <br />
-                    <span className="text-xs text-slate-500 font-mono">{contact.deviceId}</span>
+                <TableRow key={contact.key} className="border-slate-800 hover:bg-slate-800/50">
+                  <TableCell className="font-medium text-slate-300 align-top">
+                    <div className="space-y-1.5">
+                      {contact.sources.map((s) => (
+                        <div key={s.id}>
+                          {s.employeeName || "—"}
+                          <br />
+                          <span className="text-xs text-slate-500 font-mono">{s.deviceId}</span>
+                        </div>
+                      ))}
+                    </div>
                   </TableCell>
-                  <TableCell className="text-slate-300">{contact.contactName || "—"}</TableCell>
-                  <TableCell className="text-slate-300 font-mono">{contact.phoneNumber || "—"}</TableCell>
-                  <TableCell className="text-slate-400 text-sm">
-                    {contact.syncedAt ? format(new Date(contact.syncedAt), "MMM d, yyyy HH:mm") : "-"}
+                  <TableCell className="text-slate-300 align-top">
+                    {contact.contactName || "—"}
+                    {contact.sources.length > 1 ? (
+                      <span className="ml-2 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">
+                        {contact.sources.length} devices
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-slate-300 font-mono align-top">
+                    {contact.phoneNumber || "—"}
+                  </TableCell>
+                  <TableCell className="text-slate-400 text-sm align-top">
+                    {contact.lastSyncedAt
+                      ? format(new Date(contact.lastSyncedAt), "MMM d, yyyy HH:mm")
+                      : "-"}
                   </TableCell>
                 </TableRow>
               ))

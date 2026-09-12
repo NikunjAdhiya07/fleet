@@ -56,14 +56,19 @@ interface DeviceState {
   lastRecordedAt?: string;
   trackingStatus?: string;
   batteryPercent?: number;
-  freshness: "fresh" | "stale" | "old" | "unavailable";
+  freshness: "fresh" | "parked" | "stale" | "old" | "unavailable";
   ageMinutes: number | null;
+  /** Minutes since the phone last checked in, moving or not. */
+  heardMinutes?: number | null;
   /** Why this device is not recording, straight from the phone's heartbeat. */
   blockedReason?: string | null;
 }
 
 const freshnessMeta = {
   fresh: { label: "Live", chip: "bg-emerald-500 text-white", dot: "bg-emerald-400" },
+  // Reporting in, not moving. Its own state rather than a degraded "Live", so a
+  // standing vehicle stops looking like one we are losing contact with.
+  parked: { label: "Parked", chip: "bg-sky-500 text-white", dot: "bg-sky-400" },
   stale: { label: "3–15m", chip: "bg-amber-500 text-white", dot: "bg-amber-400" },
   old: { label: "> 15m", chip: "bg-rose-500 text-white", dot: "bg-rose-400" },
   unavailable: { label: "N/A", chip: "bg-slate-500 text-white", dot: "bg-slate-400" },

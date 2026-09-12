@@ -15,9 +15,23 @@ export interface RoutePoint {
   batteryPercent?: number;
   provider?: string;
   isMockLocation?: boolean;
+  /** Road geometry filled in between two fixes, not a surveyed sample. */
+  isInterpolated?: boolean;
+  /** The fix was map-matched onto the road network. */
+  isRoadSnapped?: boolean;
+  /** Where the fix sat before map-matching. */
+  rawLatitude?: number;
+  rawLongitude?: number;
 }
 
 export type SpeedBand = "idle" | "normal" | "moderate" | "high";
+
+/**
+ * Purple is the route's stopped colour — idle markers, the idle stretch of the
+ * drawn line, the scrubber bands and the timeline all use it, so a stop reads
+ * as the same thing wherever it appears.
+ */
+export const IDLE_COLOR = "#a855f7";
 
 // Upper bound (km/h, exclusive) for each band; "high" is everything above.
 export const SPEED_BANDS: {
@@ -26,7 +40,7 @@ export const SPEED_BANDS: {
   maxKmh: number;
   color: string;
 }[] = [
-  { band: "idle", label: "Idle / Stopped", maxKmh: 3, color: "#3b82f6" },
+  { band: "idle", label: "Idle / Stopped", maxKmh: 3, color: IDLE_COLOR },
   { band: "normal", label: "Normal", maxKmh: 40, color: "#10b981" },
   { band: "moderate", label: "Moderate", maxKmh: 70, color: "#f59e0b" },
   { band: "high", label: "High", maxKmh: Infinity, color: "#ef4444" },
@@ -337,6 +351,10 @@ export function maxSpeedPoint(points: RoutePoint[]): MaxSpeed | null {
   let best = -1;
   let bestKmh = -1;
   for (let i = 0; i < points.length; i++) {
+    // Road-geometry fillers carry a speed interpolated across the leg, not a
+    // reading — reporting one as the trip's maximum would credit the vehicle
+    // with a speed no device ever measured.
+    if (points[i].isInterpolated) continue;
     const kmh = speedKmh(points[i]);
     if (kmh > bestKmh) {
       bestKmh = kmh;

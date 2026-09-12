@@ -9,6 +9,7 @@ import { Circle, FitBounds, PanTo, Polyline, type LatLng } from "@/components/ma
 
 const TRACK_COLOR: Record<string, string> = {
   fresh: "#10b981",
+  parked: "#0ea5e9",
   stale: "#f59e0b",
   old: "#ef4444",
   unavailable: "#64748b",
@@ -23,8 +24,11 @@ interface DeviceState {
   latestSpeed?: number;
   lastReceivedAt?: string;
   batteryPercent?: number;
-  freshness: "fresh" | "stale" | "old" | "unavailable";
+  freshness: "fresh" | "parked" | "stale" | "old" | "unavailable";
+  /** Minutes since the vehicle last moved. */
   ageMinutes: number | null;
+  /** Minutes since the phone last checked in, moving or not. */
+  heardMinutes?: number | null;
 }
 
 export interface DeviceTrack {
@@ -262,9 +266,16 @@ export default function FleetMapCore({
                       </p>
                     )}
                     {d.batteryPercent != null && <p>Battery: {d.batteryPercent}%</p>}
-                    {d.lastReceivedAt && d.ageMinutes != null && (
+                    {/* Two clocks now, so say which is which: a parked vehicle
+                        has an old "moved" and a recent "heard". */}
+                    {d.ageMinutes != null && (
                       <p className="text-slate-400">
-                        {d.ageMinutes < 1 ? "< 1" : Math.round(d.ageMinutes)} min ago
+                        Moved {d.ageMinutes < 1 ? "< 1" : Math.round(d.ageMinutes)} min ago
+                      </p>
+                    )}
+                    {d.heardMinutes != null && (
+                      <p className="text-slate-400">
+                        Heard {d.heardMinutes < 1 ? "< 1" : Math.round(d.heardMinutes)} min ago
                       </p>
                     )}
                   </div>

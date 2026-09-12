@@ -5,6 +5,11 @@ import connectToDatabase from "@/lib/db";
 import LocationPoint from "@/models/LocationPoint";
 import { companyIdIn } from "@/lib/companyIdQuery";
 import { filterGpsTrack, type RawTrackPoint } from "@/lib/gpsTrackFilter";
+import {
+  snapRouteToRoads,
+  densifyAlongRoute,
+  type RouteDoc,
+} from "@/lib/googleRoadsMatch";
 
 export const dynamic = "force-dynamic";
 
@@ -69,9 +74,34 @@ export async function GET(req: Request) {
       ];
     });
 
-    const cleaned = filterGpsTrack(docs, { maxPoints: 5000 }).map((p) => p.doc);
+    const cleaned = filterGpsTrack(docs, { maxPoints: 5000 });
+    const cleanedDocs = cleaned.map((p) => p.doc as RouteDoc);
 
-    return NextResponse.json(cleaned);
+    // Map-match the trail onto the road network. Cleaned GPS still wanders off
+    // the carriageway — through buildings, across the wrong side of a divided
+    // road — because each fix carries its own error; joining those fixes with
+    // straight lines then makes the route look like it left the road entirely.
+    // Snapping fixes both: the points land on the road and the geometry between
+    // them follows it. Any failure falls back to the cleaned GPS trail.
+    const snap =
+      searchParams.get("snap") !== "0" && process.env.FLEET_MAP_SNAP !== "0";
+
+    if (snap && cleaned.length >= 2) {
+      try {
+        const matched = await snapRouteToRoads(
+          deviceId || sessionId || "route",
+          cleaned
+        );
+        if (matched) {
+          const densified = densifyAlongRoute(matched, cleanedDocs);
+          if (densified.length >= 2) return NextResponse.json(densified);
+        }
+      } catch (err) {
+        console.warn("Route history road matching failed, using raw GPS:", err);
+      }
+    }
+
+    return NextResponse.json(cleanedDocs);
   } catch (error) {
     console.error("GET /api/location/history error:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
