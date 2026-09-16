@@ -7,6 +7,12 @@ export interface RawTrackPoint {
   speed?: number;
   accuracyMeters?: number | null;
   isMockLocation?: boolean | null;
+  /**
+   * The fix belongs to a standstill and has been pinned to that stop's position.
+   * Set by `pinStationary`; consumers use it to leave the point where it was
+   * recorded rather than moving it onto a road.
+   */
+  isStationary?: boolean;
 }
 
 const EARTH_R = 6_371_000;
@@ -61,7 +67,21 @@ export interface TrackFilterOptions {
   spikeExcursionM?: number;
   /** Soft cap of points kept per device after filtering. Default 1500. */
   maxPoints?: number;
+  /**
+   * Pin every standstill to one position instead of letting its fixes drift.
+   *
+   * A parked device keeps reporting, and those fixes wander within their own
+   * error radius — which draws as the vehicle creeping around while it is
+   * demonstrably stopped. Pinning keeps every fix (so the stop keeps its real
+   * duration and playback dwells through it) but gives them all the position of
+   * the tightest fix in the stop, so the cursor sits still where it actually
+   * stopped. Off by default: the live map collapses standstills instead.
+   */
+  pinStationary?: boolean;
 }
+
+/** A run of standstill fixes must span at least this long to be pinned. */
+const STATIONARY_MIN_MS = 45_000;
 
 /**
  * Clean a chronologically sorted GPS trail:
@@ -163,7 +183,11 @@ export function filterGpsTrack<T extends RawTrackPoint>(
   }
 
   const deSpiked = removeSpikes(cleaned, spikeExcursionM, minMoveM);
-  const settled = collapseParkedTail(deSpiked, movingSpeedMps, minMoveM);
+  // Pinning supersedes the tail collapse: it holds every standstill still,
+  // including the last one, without throwing away the fixes that time it.
+  const settled = opts.pinStationary
+    ? pinStationaryRuns(deSpiked, movingSpeedMps, minMoveM)
+    : collapseParkedTail(deSpiked, movingSpeedMps, minMoveM);
 
   if (settled.length <= maxPoints) return settled;
 
@@ -215,6 +239,62 @@ function removeSpikes<T extends RawTrackPoint>(
     out.push(cur);
   }
   out.push(points[points.length - 1]);
+  return out;
+}
+
+/**
+ * Hold every standstill at one position.
+ *
+ * Unlike `collapseParkedTail`, which throws the stop's fixes away, this keeps
+ * all of them — the stop's duration, and the samples playback walks through
+ * while it waits there — and only rewrites where they sit. That matters for
+ * route history twice over: the cursor stops dead at the recorded spot instead
+ * of wandering, and the stop stays densely sampled, so the departure is never
+ * separated from it by a hole big enough to be read as a logging gap.
+ *
+ * Only a run that is genuinely a standstill is pinned: every fix in it reports
+ * a stopped speed, it spans real time, and it all fits inside the error radius
+ * of its own tightest fix. A slow crawl fails that last test and is left alone.
+ */
+function pinStationaryRuns<T extends RawTrackPoint>(
+  points: T[],
+  movingSpeedMps: number,
+  minMoveM: number
+): T[] {
+  if (points.length < 2) return points;
+  const out = [...points];
+  const timeOf = (p: T) => new Date(p.recordedAt).getTime();
+
+  let i = 0;
+  while (i < out.length) {
+    // Unknown speed is not a stopped speed, so a client that never reports one
+    // never has its trail pinned in place.
+    if ((out[i].speed ?? Infinity) >= movingSpeedMps) {
+      i++;
+      continue;
+    }
+
+    let end = i;
+    while (end + 1 < out.length && (out[end + 1].speed ?? Infinity) < movingSpeedMps) end++;
+
+    const run = out.slice(i, end + 1);
+    if (run.length >= 2 && timeOf(run[run.length - 1]) - timeOf(run[0]) >= STATIONARY_MIN_MS) {
+      // Tightest fix in the run is the best estimate of where it actually stopped.
+      const anchor = run.reduce((best, p) =>
+        (p.accuracyMeters ?? Infinity) < (best.accuracyMeters ?? Infinity) ? p : best
+      );
+      const spread = Math.max(
+        ...run.map((p) => haversineMeters(anchor.lat, anchor.lng, p.lat, p.lng))
+      );
+      const driftRadius = Math.max(minMoveM * 4, 2 * (anchor.accuracyMeters ?? 0));
+      if (spread <= driftRadius) {
+        for (let k = i; k <= end; k++) {
+          out[k] = { ...out[k], lat: anchor.lat, lng: anchor.lng, isStationary: true };
+        }
+      }
+    }
+    i = end + 1;
+  }
   return out;
 }
 

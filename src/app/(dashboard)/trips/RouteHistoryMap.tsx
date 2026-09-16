@@ -1,6 +1,11 @@
 "use client";
 
-import { AdvancedMarker, InfoWindow, useMap } from "@vis.gl/react-google-maps";
+import {
+  AdvancedMarker,
+  AdvancedMarkerAnchorPoint,
+  InfoWindow,
+  useMap,
+} from "@vis.gl/react-google-maps";
 import { useEffect, useMemo, useState } from "react";
 import MapShell from "@/components/maps/MapShell";
 import { FitBounds, Polyline, type LatLng } from "@/components/maps/overlays";
@@ -117,7 +122,13 @@ const DIRECTION_ARROW_PATH = "M 0 -7 L 5 6 L 0 2.5 L -5 6 Z";
 /** Pixel spacing between direction arrows — constant on screen at any zoom. */
 const DIRECTION_ARROW_REPEAT = "110px";
 
-/** Direction-of-travel arrow, rotated to the heading. */
+/**
+ * Direction-of-travel arrow, rotated to the heading.
+ *
+ * The path is drawn so its bounding box is centred in the viewBox: the glyph is
+ * anchored on the route point itself, and `rotate` pivots about the box centre,
+ * so the arrow stays on the line at every heading instead of swinging off it.
+ */
 function ArrowGlyph({
   color,
   heading,
@@ -138,7 +149,7 @@ function ArrowGlyph({
     >
       <svg width={size} height={size} viewBox="0 0 24 24">
         <path
-          d="M12 2 L20 20 L12 16 L4 20 Z"
+          d="M12 3 L20 21 L12 17 L4 21 Z"
           fill={color}
           stroke="#fff"
           strokeWidth={1.5}
@@ -632,6 +643,10 @@ export default function RouteHistoryMap({
             <>
               <AdvancedMarker
                 position={{ lat: readoutPoint.latitude, lng: readoutPoint.longitude }}
+                // Centre the glyph on its coordinate. The default bottom-centre
+                // anchor floats the arrow above the route; centring puts it on
+                // the line, so it reads as the vehicle's actual position.
+                anchorPoint={AdvancedMarkerAnchorPoint.CENTER}
                 title={[
                   `${speedKmh(readoutPoint).toFixed(0)} km/h`,
                   fmtTime(readoutPoint.recordedAt),

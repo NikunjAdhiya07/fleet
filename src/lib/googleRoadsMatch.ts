@@ -86,6 +86,20 @@ export interface SnappedRoutePoint {
   lat: number;
   lng: number;
   originalIndex: number | null;
+  /**
+   * False when this vertex is a raw GPS fix the matcher never placed on a road —
+   * a failed chunk, or a fix too far from the matched geometry to reproject.
+   * Those are the vertices that can still cut a corner, so they are reported
+   * rather than passed off as road geometry.
+   */
+  snapped: boolean;
+  /**
+   * The fix was recorded during a standstill and is held at the position it was
+   * recorded at. Map-matching is not applied to these: a parked vehicle is not
+   * on the carriageway, and sliding it onto one draws movement that never
+   * happened.
+   */
+  stationary?: boolean;
 }
 
 async function matchChunkDetailed(
@@ -143,7 +157,7 @@ async function matchChunkDetailed(
       // time and speed can be attached.
       const prev = route[route.length - 1];
       if (prev && prev.lat === lat && prev.lng === lng && originalIndex == null) continue;
-      route.push({ lat: lat as number, lng: lng as number, originalIndex });
+      route.push({ lat: lat as number, lng: lng as number, originalIndex, snapped: true });
     }
     return route.length >= 2 ? route : null;
   } catch {
@@ -294,12 +308,83 @@ function splitAtGaps(thinned: ThinnedRef[]): ThinnedRef[][] {
   return runs;
 }
 
+/** Metres per degree of latitude — the local projection used for reprojection. */
+const M_PER_DEG_LAT = 111_320;
+/**
+ * A restored fix further than this from the road its leg followed is not a
+ * point on that road, so it keeps its raw position rather than being dragged
+ * onto geometry it never belonged to.
+ */
+const MAX_REPROJECT_M = 200;
+
+/** Cumulative distance along a polyline, vertex by vertex. */
+function alongDistances(path: SnappedRoutePoint[]): number[] {
+  const along = [0];
+  for (let i = 1; i < path.length; i++) {
+    along.push(
+      along[i - 1] +
+        haversineMeters(path[i - 1].lat, path[i - 1].lng, path[i].lat, path[i].lng)
+    );
+  }
+  return along;
+}
+
+/**
+ * Nearest point on `path` to `p`, in a flat local projection.
+ *
+ * Returns where it lands, how far along the path that is, and how far `p` sat
+ * from the road — the last being the test for whether the fix belongs there.
+ */
+function projectOntoPath(
+  p: { lat: number; lng: number },
+  path: SnappedRoutePoint[],
+  along: number[]
+): { lat: number; lng: number; along: number; offsetM: number } | null {
+  if (path.length < 2) return null;
+  const kx = Math.cos((path[0].lat * Math.PI) / 180) * M_PER_DEG_LAT;
+  const ky = M_PER_DEG_LAT;
+  if (!Number.isFinite(kx) || kx === 0) return null;
+
+  const px = p.lng * kx;
+  const py = p.lat * ky;
+  let best: { lat: number; lng: number; along: number; offsetM: number } | null = null;
+
+  for (let i = 1; i < path.length; i++) {
+    const ax = path[i - 1].lng * kx;
+    const ay = path[i - 1].lat * ky;
+    const dx = path[i].lng * kx - ax;
+    const dy = path[i].lat * ky - ay;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
+    const cx = ax + dx * t;
+    const cy = ay + dy * t;
+    const offsetM = Math.hypot(px - cx, py - cy);
+    if (!best || offsetM < best.offsetM) {
+      best = {
+        lat: cy / ky,
+        lng: cx / kx,
+        along: along[i - 1] + (along[i] - along[i - 1]) * t,
+        offsetM,
+      };
+    }
+  }
+  return best;
+}
+
 /**
  * Fill in fixes the Roads API left out of its answer.
  *
- * Matching occasionally returns fewer anchors than it was given. Those fixes
- * still happened, so they are reinserted at their raw position rather than
- * dropped — losing them would shorten stops and punch holes in playback.
+ * Matching routinely returns fewer anchors than it was given — it declines the
+ * fixes it is least sure of, which are exactly the ones sitting furthest off
+ * the carriageway. Those fixes still happened, so dropping them would shorten
+ * stops and punch holes in playback; but reinserting them at their raw position
+ * is what makes an otherwise road-matched route dart off the road and back,
+ * cutting through buildings on the way.
+ *
+ * So a restored fix is projected onto the road geometry of the leg it falls in,
+ * and takes its place in that leg by distance travelled rather than ahead of it.
+ * Only a fix with no surrounding geometry, or one too far from it to plausibly
+ * belong, keeps its raw position — and is marked unsnapped when it does.
  */
 function restoreMissingAnchors(
   matched: SnappedRoutePoint[],
@@ -307,15 +392,65 @@ function restoreMissingAnchors(
 ): SnappedRoutePoint[] {
   const out: SnappedRoutePoint[] = [];
   let next = 0;
-  // Geometry is held back until the fix that closes its leg is known, so a
-  // restored fix lands ahead of it and the trail stays in time order.
+  // Geometry is held back until the fix that closes its leg is known, because
+  // only then is it known which road the restored fixes should land on.
   let fillers: SnappedRoutePoint[] = [];
+  /** Last emitted vertex known to sit on the road — the leg's start. */
+  let legStart: SnappedRoutePoint | null = null;
 
-  const emitUpTo = (limit: number) => {
-    while (next < thinned.length && thinned[next].idx < limit) {
-      const ref = thinned[next++];
-      out.push({ lat: ref.p.lat, lng: ref.p.lng, originalIndex: ref.idx });
+  const raw = (ref: ThinnedRef): SnappedRoutePoint => ({
+    lat: ref.p.lat,
+    lng: ref.p.lng,
+    originalIndex: ref.idx,
+    snapped: false,
+    stationary: ref.p.isStationary === true,
+  });
+
+  /** Emit one leg: its road geometry plus any fix the matcher declined. */
+  const flushLeg = (limit: number, closing: SnappedRoutePoint | null) => {
+    const missing: ThinnedRef[] = [];
+    while (next < thinned.length && thinned[next].idx < limit) missing.push(thinned[next++]);
+
+    const leg = legStart ? [legStart, ...fillers, ...(closing ? [closing] : [])] : [];
+    if (missing.length === 0 || leg.length < 2) {
+      out.push(...fillers, ...missing.map(raw));
+      fillers = [];
+      return;
     }
+
+    const along = alongDistances(leg);
+    // Place both the road geometry and the restored fixes on one axis — how far
+    // along the leg each sits — so they interleave in travel order.
+    const placed: { at: number; pt: SnappedRoutePoint }[] = fillers.map((f, i) => ({
+      at: along[i + 1],
+      pt: f,
+    }));
+
+    let floor = 0;
+    for (const ref of missing) {
+      // A standstill fix is already where it belongs; projecting it would slide
+      // the stop along the road and invent movement through it.
+      if (ref.p.isStationary) {
+        placed.push({ at: floor, pt: raw(ref) });
+        continue;
+      }
+      const hit = projectOntoPath(ref.p, leg, along);
+      if (!hit || hit.offsetM > MAX_REPROJECT_M) {
+        placed.push({ at: floor, pt: raw(ref) });
+        continue;
+      }
+      // Fixes are already in time order, so a projection may not walk back down
+      // the leg — that would draw the route doubling over itself.
+      floor = Math.max(hit.along, floor);
+      placed.push({
+        at: floor,
+        pt: { lat: hit.lat, lng: hit.lng, originalIndex: ref.idx, snapped: true },
+      });
+    }
+
+    placed.sort((a, b) => a.at - b.at);
+    out.push(...placed.map((x) => x.pt));
+    fillers = [];
   };
 
   for (const entry of matched) {
@@ -323,14 +458,14 @@ function restoreMissingAnchors(
       fillers.push(entry);
       continue;
     }
-    emitUpTo(entry.originalIndex);
-    out.push(...fillers);
-    fillers = [];
+    flushLeg(entry.originalIndex, entry);
     if (next < thinned.length && thinned[next].idx === entry.originalIndex) next++;
     out.push(entry);
+    legStart = entry;
   }
-  // Trailing geometry has no closing fix; it cannot be timed, so it is dropped.
-  emitUpTo(Infinity);
+  // Trailing geometry has no closing fix. It still guides any fix restored after
+  // it; whatever is left over cannot be timed, and densify drops it.
+  flushLeg(Infinity, null);
   return out;
 }
 
@@ -375,7 +510,7 @@ export async function snapRouteToRoads(
   for (const run of splitAtGaps(thinned)) {
     if (run.length < 2) {
       for (const ref of run) {
-        merged.push({ lat: ref.p.lat, lng: ref.p.lng, originalIndex: ref.idx });
+        merged.push({ lat: ref.p.lat, lng: ref.p.lng, originalIndex: ref.idx, snapped: false });
         lastAnchor = ref.idx;
       }
       continue;
@@ -394,7 +529,12 @@ export async function snapRouteToRoads(
       // degrades to a straight leg instead of losing the rest of the route.
       const piece: SnappedRoutePoint[] =
         matched ??
-        chunk.map((t, i) => ({ lat: t.p.lat, lng: t.p.lng, originalIndex: i }));
+        chunk.map((t, i) => ({
+          lat: t.p.lat,
+          lng: t.p.lng,
+          originalIndex: i,
+          snapped: false,
+        }));
 
       for (const entry of piece) {
         const globalIdx =
@@ -406,7 +546,18 @@ export async function snapRouteToRoads(
         // Chunks overlap by one fix so the legs join; drop the repeat, and with
         // it any geometry the next window redraws before that fix.
         if (globalIdx <= lastAnchor) continue;
-        merged.push({ lat: entry.lat, lng: entry.lng, originalIndex: globalIdx });
+        // A fix recorded at a standstill keeps where it was recorded. The
+        // matcher would otherwise pull the whole stop onto the nearest road and
+        // spread it along it, which is the drift this is here to prevent.
+        const ref = chunk[entry.originalIndex!];
+        const parked = ref.p.isStationary === true;
+        merged.push({
+          lat: parked ? ref.p.lat : entry.lat,
+          lng: parked ? ref.p.lng : entry.lng,
+          originalIndex: globalIdx,
+          snapped: parked ? false : entry.snapped,
+          stationary: parked,
+        });
         lastAnchor = globalIdx;
         anchoredInRun = true;
       }
@@ -415,7 +566,13 @@ export async function snapRouteToRoads(
 
   if (merged.length < 2) return null;
 
-  const route = restoreMissingAnchors(merged, thinned);
+  // Restore against every recorded fix, not just the ones thinning kept for the
+  // matcher. Thinning exists to keep the request count down; dropping the fixes
+  // it skipped from the result as well is what left the drawn route stepping
+  // between widely spaced samples and skipping the recorded positions between
+  // them. They are all put back here, each on the road geometry of its own leg.
+  const allRefs: ThinnedRef[] = points.map((p, idx) => ({ p, idx }));
+  const route = restoreMissingAnchors(merged, allRefs);
   historyCache.set(key, { route, expires: Date.now() + HISTORY_CACHE_TTL_MS });
   if (historyCache.size > 100) {
     const now = Date.now();
@@ -510,7 +667,8 @@ export function densifyAlongRoute(
       longitude: s.lng,
       rawLatitude: doc.latitude,
       rawLongitude: doc.longitude,
-      isRoadSnapped: true,
+      isRoadSnapped: s.snapped,
+      isStationary: s.stationary === true,
     });
     prevAnchor = { doc, lat: s.lat, lng: s.lng };
   }

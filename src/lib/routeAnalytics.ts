@@ -19,6 +19,8 @@ export interface RoutePoint {
   isInterpolated?: boolean;
   /** The fix was map-matched onto the road network. */
   isRoadSnapped?: boolean;
+  /** Recorded during a standstill and held at the position it was recorded at. */
+  isStationary?: boolean;
   /** Where the fix sat before map-matching. */
   rawLatitude?: number;
   rawLongitude?: number;

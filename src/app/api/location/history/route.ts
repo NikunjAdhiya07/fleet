@@ -74,8 +74,26 @@ export async function GET(req: Request) {
       ];
     });
 
-    const cleaned = filterGpsTrack(docs, { maxPoints: 5000 });
-    const cleanedDocs = cleaned.map((p) => p.doc as RouteDoc);
+    // Route history is played back and inspected fix by fix, so it is filtered
+    // for fidelity rather than for a tidy live-map line: standstills keep their
+    // samples (pinned in place, so the cursor sits still where the vehicle
+    // actually stopped) instead of being collapsed to one keepalive every few
+    // minutes. That collapse is what left a stop and its departure minutes
+    // apart in the trail — read downstream as a logging gap, and drawn as the
+    // route jumping straight to wherever the vehicle turned up next.
+    const cleaned = filterGpsTrack(docs, {
+      maxPoints: 5000,
+      stationaryHoldMs: 30_000,
+      pinStationary: true,
+    });
+    // Carry the cleaned position onto the document: pinning moves a standstill
+    // fix, and the raw document still holds where it drifted to.
+    const cleanedDocs: RouteDoc[] = cleaned.map((p) => ({
+      ...(p.doc as RouteDoc),
+      latitude: p.lat,
+      longitude: p.lng,
+      isStationary: p.isStationary === true,
+    }));
 
     // Map-match the trail onto the road network. Cleaned GPS still wanders off
     // the carriageway — through buildings, across the wrong side of a divided

@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Loader2, Plus, QrCode, X, Copy, Check, RefreshCw } from "lucide-react";
+import { Loader2, Plus, QrCode, X, Copy, Check, RefreshCw, Clock } from "lucide-react";
 import { format } from "date-fns";
 
 interface EnrollmentCode {
@@ -39,9 +39,13 @@ const defaultForm = {
   employeeId: "",
   role: "driver" as "driver" | "employee",
   vehicle: "",
+  username: "",
+  password: "",
   callMonitoring: true,
   locationTracking: true,
   expenseManagement: true,
+  // Codes never expire unless the admin opts in.
+  setExpiry: false,
   expiresInHours: 48,
 };
 
@@ -70,6 +74,14 @@ export default function EnrollmentPage() {
       setError("Employee name is required");
       return;
     }
+    if (form.username.trim() && form.password.length < 6) {
+      setError("Password must be at least 6 characters");
+      return;
+    }
+    if (form.password && !form.username.trim()) {
+      setError("Username is required to set a password");
+      return;
+    }
     setIsSubmitting(true); setError("");
     try {
       const body = {
@@ -77,7 +89,11 @@ export default function EnrollmentPage() {
         employeeId: form.employeeId.trim(),
         role: form.role,
         vehicle: form.vehicle.trim(),
-        expiresInHours: form.expiresInHours,
+        username: form.username.trim(),
+        password: form.password,
+        // Omitted entirely unless an expiry was asked for — the API reads a
+        // missing value as "never expires".
+        expiresInHours: form.setExpiry ? form.expiresInHours : null,
         capabilities: {
           callMonitoring: form.callMonitoring,
           locationTracking: form.locationTracking,
@@ -196,14 +212,72 @@ export default function EnrollmentPage() {
                   Expense management
                 </label>
               </div>
-              <div className="space-y-1">
-                <label className="text-sm text-slate-300">Expires in (hours)</label>
-                <Input
-                  type="number"
-                  value={form.expiresInHours}
-                  onChange={(e) => setForm((f) => ({ ...f, expiresInHours: parseInt(e.target.value) || 48 }))}
-                  className="bg-slate-950 border-slate-700 text-slate-200"
-                />
+              <div className="space-y-2 pt-1 border-t border-slate-800">
+                <label className="text-sm text-slate-300">
+                  Sign-in credentials <span className="text-slate-500">(optional)</span>
+                </label>
+                <p className="text-xs text-slate-500 -mt-1">
+                  Creates a login so this person can sign in by hand and re-authenticate on a replacement device.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-400">Username</label>
+                    <Input
+                      autoComplete="off"
+                      placeholder="e.g. ravi.kumar"
+                      value={form.username}
+                      onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
+                      className="bg-slate-950 border-slate-700 text-slate-200 placeholder:text-slate-600"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-400">Password</label>
+                    <Input
+                      type="password"
+                      autoComplete="new-password"
+                      placeholder="min. 6 characters"
+                      value={form.password}
+                      onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+                      className="bg-slate-950 border-slate-700 text-slate-200 placeholder:text-slate-600"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-1 border-t border-slate-800">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <label className="text-sm text-slate-300">Expiry</label>
+                    <p className="text-xs text-slate-500">
+                      {form.setExpiry ? "Code stops working after the set time." : "Code never expires — valid until used or revoked."}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setForm((f) => ({ ...f, setExpiry: !f.setExpiry }))}
+                    className={
+                      form.setExpiry
+                        ? "border-indigo-500/60 text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20"
+                        : "border-slate-600 text-slate-300 bg-transparent hover:bg-slate-800"
+                    }
+                  >
+                    <Clock className="w-4 h-4 mr-2" />
+                    {form.setExpiry ? "Expiry on" : "Set expiry"}
+                  </Button>
+                </div>
+                {form.setExpiry && (
+                  <div className="space-y-1">
+                    <label className="text-xs text-slate-400">Expires in (hours)</label>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={form.expiresInHours}
+                      onChange={(e) => setForm((f) => ({ ...f, expiresInHours: parseInt(e.target.value) || 48 }))}
+                      className="bg-slate-950 border-slate-700 text-slate-200"
+                    />
+                  </div>
+                )}
               </div>
             </div>
 
@@ -301,7 +375,9 @@ export default function EnrollmentPage() {
                     <Badge variant="outline" className={cls}>{label}</Badge>
                   </TableCell>
                   <TableCell className="text-slate-400 text-xs">
-                    {c.expiresAt ? format(new Date(c.expiresAt), "MMM dd, HH:mm") : "—"}
+                    {c.expiresAt
+                      ? format(new Date(c.expiresAt), "MMM dd, HH:mm")
+                      : <span className="text-slate-500">Never</span>}
                   </TableCell>
                   <TableCell className="text-slate-400 text-xs">
                     {c.usedAt ? format(new Date(c.usedAt), "MMM dd, HH:mm") : <span className="text-slate-600">—</span>}

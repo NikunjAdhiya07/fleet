@@ -78,6 +78,8 @@ interface LocationPoint {
   /** Road geometry filled in between two fixes, not a surveyed sample. */
   isInterpolated?: boolean;
   isRoadSnapped?: boolean;
+  /** Recorded at a standstill and held at the position it was recorded at. */
+  isStationary?: boolean;
 }
 
 interface FleetDevice {
@@ -96,11 +98,22 @@ const STATUS_CHIP: Record<string, string> = {
 
 const SPEED_LIMIT_KEY = "fleet.route.speedLimit.";
 
-const PLAYBACK_SPEEDS = [0.5, 1, 2, 4] as const;
+const PLAYBACK_SPEEDS = [0.1, 0.5, 1, 2, 4] as const;
 /** Half speed by default — 1× stepped through a day's route too fast to follow. */
 const DEFAULT_PLAYBACK_SPEED = 0.5;
 /** Frame interval at 1×; slower rates stretch it instead of taking part-steps. */
 const PLAYBACK_TICK_MS = 60;
+/**
+ * Most samples 1× may cross in one frame.
+ *
+ * The step is otherwise scaled to finish any route in about the same wall time,
+ * which on a long route means leaping tens of fixes per frame — the cursor
+ * teleports past whole stretches instead of travelling them, and does it worst
+ * straight after a stop, where the samples are densest. Capping it keeps
+ * playback continuous and lets a long route simply take longer; 2× and 4× are
+ * still there for covering ground quickly.
+ */
+const MAX_PLAYBACK_STEP = 4;
 
 function vehicleLabel(vehicle: FleetDevice["vehicle"]): string | undefined {
   if (!vehicle) return undefined;
@@ -234,6 +247,20 @@ export default function RouteHistoryPage() {
     () => (selectedSubTrip ? points.filter((p) => p.sessionId === selectedSubTrip) : points),
     [points, selectedSubTrip]
   );
+
+  /**
+   * Share of the drawn route that sits on a matched road. Anything under 1
+   * means part of the line is raw GPS — which is what a route cutting across
+   * buildings looks like — so the gap is reported rather than left to guess at.
+   */
+  const roadMatch = useMemo(() => {
+    // Standstill fixes are deliberately left where they were recorded, so they
+    // are not road-matched and must not count against the coverage.
+    const onRoute = displayedPoints.filter((p) => !p.isStationary);
+    if (onRoute.length === 0) return null;
+    const snapped = onRoute.filter((p) => p.isRoadSnapped).length;
+    return { snapped, total: onRoute.length, pct: snapped / onRoute.length };
+  }, [displayedPoints]);
 
   const idleEvents = useMemo(
     () => detectIdleEvents(displayedPoints),
@@ -422,12 +449,20 @@ export default function RouteHistoryPage() {
 
   useEffect(() => {
     if (!isPlaying || displayedPoints.length < 2) return;
-    // Sub-1× rates slow the tick rather than shrinking the step: a fractional
-    // step would land the cursor between samples, and every consumer indexes
-    // `displayedPoints` directly.
-    const baseStep = Math.max(1, Math.ceil(displayedPoints.length / 300));
-    const step = speed >= 1 ? baseStep * speed : baseStep;
-    const tickMs = speed >= 1 ? PLAYBACK_TICK_MS : Math.round(PLAYBACK_TICK_MS / speed);
+    // Sub-1× rates walk one sample per tick and stretch the interval instead of
+    // taking a fractional step: a fractional step would land the cursor between
+    // samples, and every consumer indexes `displayedPoints` directly. Moving a
+    // point at a time is also what makes 0.1× useful — the cursor visits every
+    // reading rather than skipping in `baseStep` jumps.
+    const baseStep = Math.min(
+      MAX_PLAYBACK_STEP,
+      Math.max(1, Math.ceil(displayedPoints.length / 300))
+    );
+    const step = speed >= 1 ? baseStep * speed : 1;
+    const tickMs =
+      speed >= 1
+        ? PLAYBACK_TICK_MS
+        : Math.min(1000, Math.max(30, Math.round(PLAYBACK_TICK_MS / (speed * baseStep))));
     const id = setInterval(() => {
       setPlaybackIndex((idx) => {
         const next = (idx ?? 0) + step;
@@ -799,6 +834,25 @@ export default function RouteHistoryPage() {
                   {endPlace || "Resolving end…"}
                 </span>
               </p>
+              {roadMatch && roadMatch.pct < 0.98 && (
+                <p
+                  className={`flex items-start gap-1.5 ${
+                    roadMatch.pct < 0.5 ? "text-rose-600" : "text-amber-600"
+                  }`}
+                  title={
+                    roadMatch.snapped === 0
+                      ? "Road matching is off or unavailable (check the Roads API key on the server), so the line joins raw GPS fixes directly and can cut across buildings."
+                      : `${roadMatch.snapped} of ${roadMatch.total} points sit on a matched road; the rest are raw GPS and may leave the carriageway.`
+                  }
+                >
+                  <Route className="mt-0.5 h-3 w-3 shrink-0" />
+                  <span>
+                    {roadMatch.snapped === 0
+                      ? "Raw GPS — not road-matched"
+                      : `${Math.round(roadMatch.pct * 100)}% road-matched`}
+                  </span>
+                </p>
+              )}
             </div>
           </CollapsiblePanel>
         )}

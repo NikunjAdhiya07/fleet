@@ -11,16 +11,85 @@ import { UserPlus, Loader2, Edit2, Trash2, ShieldAlert, Wallet, Plus, X, Users, 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 
+/** What the Android app may do once this user signs in on a handset. */
+type Capabilities = {
+  callMonitoring: boolean;
+  locationTracking: boolean;
+  expenseManagement: boolean;
+};
+
+const DEFAULT_CAPABILITIES: Capabilities = {
+  callMonitoring: true,
+  locationTracking: false,
+  expenseManagement: false,
+};
+
+const CAPABILITY_LABELS: Array<{ key: keyof Capabilities; label: string; hint: string }> = [
+  { key: "callMonitoring", label: "Call monitoring", hint: "Sync call logs and contacts" },
+  { key: "locationTracking", label: "Location tracking", hint: "Record GPS routes on shift" },
+  { key: "expenseManagement", label: "Expenses", hint: "Submit expense claims and wallet" },
+];
+
+/**
+ * Device capabilities picker. These used to be chosen per enrollment code; they
+ * now live on the user, because a driver signs in with their own credentials and
+ * there is no code to carry them.
+ */
+function CapabilityPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: Capabilities;
+  onChange: (next: Capabilities) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+        Device access
+      </label>
+      <div className="space-y-2 rounded-lg border border-slate-700/80 bg-slate-950/50 p-3">
+        {CAPABILITY_LABELS.map(({ key, label, hint }) => (
+          <label
+            key={key}
+            className={`flex items-start gap-3 ${disabled ? "opacity-50" : "cursor-pointer"}`}
+          >
+            <input
+              type="checkbox"
+              className="mt-1 h-4 w-4 accent-indigo-500"
+              checked={value[key]}
+              disabled={disabled}
+              onChange={(e) => onChange({ ...value, [key]: e.target.checked })}
+            />
+            <span className="leading-tight">
+              <span className="block text-sm text-white">{label}</span>
+              <span className="block text-xs text-slate-500">{hint}</span>
+            </span>
+          </label>
+        ))}
+        {disabled && (
+          <p className="text-xs text-slate-500">
+            Only driver and employee accounts sign in on a device.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function UsersPage() {
   const [users, setUsers] = useState<any[]>([]);
   const [departments, setDepartments] = useState<Array<{ _id: string; name: string }>>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [formData, setFormData] = useState({ name: "", email: "", username: "", password: "", role: "driver", departmentId: "" });
+  const [capabilities, setCapabilities] = useState<Capabilities>(DEFAULT_CAPABILITIES);
   const [isCreating, setIsCreating] = useState(false);
 
   // Edit / Delete states
   const [editingUser, setEditingUser] = useState<any | null>(null);
   const [editFormData, setEditFormData] = useState({ name: "", email: "", username: "", password: "", role: "", departmentId: "" });
+  const [editCapabilities, setEditCapabilities] = useState<Capabilities>(DEFAULT_CAPABILITIES);
   const [isUpdating, setIsUpdating] = useState(false);
   
   const [deletingUser, setDeletingUser] = useState<any | null>(null);
@@ -70,11 +139,12 @@ export default function UsersPage() {
       const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({ ...formData, capabilities }),
       });
       if (res.ok) {
         fetchUsers();
         setFormData({ name: "", email: "", username: "", password: "", role: "driver", departmentId: "" });
+        setCapabilities(DEFAULT_CAPABILITIES);
       } else {
         const data = await res.json();
         alert(data.error || "Failed to create user");
@@ -96,6 +166,14 @@ export default function UsersPage() {
       role: user.role,
       departmentId: user.departmentId || user.department?._id || "",
     });
+    // Users created before this field existed have no capabilities. Show them as
+    // all-off, which is what the login endpoint will actually grant — not the
+    // create-form default, which would misrepresent the device's real access.
+    setEditCapabilities({
+      callMonitoring: Boolean(user.capabilities?.callMonitoring),
+      locationTracking: Boolean(user.capabilities?.locationTracking),
+      expenseManagement: Boolean(user.capabilities?.expenseManagement),
+    });
   };
 
   const updateUser = async (e: React.FormEvent) => {
@@ -107,7 +185,8 @@ export default function UsersPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           _id: editingUser._id,
-          ...editFormData
+          ...editFormData,
+          capabilities: editCapabilities,
         }),
       });
       if (res.ok) {
@@ -257,6 +336,11 @@ export default function UsersPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <CapabilityPicker
+                value={capabilities}
+                onChange={setCapabilities}
+                disabled={formData.role !== "driver" && formData.role !== "employee"}
+              />
               <Button type="submit" disabled={isCreating} className="w-full h-12 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold shadow-lg shadow-indigo-500/25 transition-all">
                 {isCreating ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <UserPlus className="mr-2 h-5 w-5" />}
                 Add Employee
@@ -509,6 +593,11 @@ export default function UsersPage() {
                 </SelectContent>
               </Select>
             </div>
+            <CapabilityPicker
+              value={editCapabilities}
+              onChange={setEditCapabilities}
+              disabled={editFormData.role !== "driver" && editFormData.role !== "employee"}
+            />
             <DialogFooter className="pt-4">
               <Button type="button" variant="ghost" onClick={() => setEditingUser(null)} className="hover:bg-slate-800 text-slate-300">Cancel</Button>
               <Button type="submit" disabled={isUpdating} className="bg-indigo-600 hover:bg-indigo-700">

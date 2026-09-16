@@ -7,6 +7,32 @@ import Driver from "@/models/Driver";
 import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 
+/**
+ * Device capabilities for this user — what the Android app may do once they sign
+ * in on a handset. Replaces the per-code capabilities that single-use enrollment
+ * codes used to carry (see backend `/api/enrollment/login`).
+ *
+ * Absent input falls back to the old code-generator default for a driver (call
+ * monitoring on, location and expenses off) rather than to nothing, so a driver
+ * created through an older client still gets a working app.
+ */
+function normalizeCapabilities(raw: unknown, role?: string) {
+  const isDevice = role === "driver" || role === "employee";
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    return {
+      callMonitoring: Boolean(o.callMonitoring),
+      locationTracking: Boolean(o.locationTracking),
+      expenseManagement: Boolean(o.expenseManagement),
+    };
+  }
+  return {
+    callMonitoring: isDevice,
+    locationTracking: false,
+    expenseManagement: false,
+  };
+}
+
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -80,6 +106,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
+    // What a device may do once this user signs in on it. Drivers who sign in
+    // with nothing ticked get a working app that records nothing, so default a
+    // driver to call monitoring the way enrollment codes did.
+    const capabilities = normalizeCapabilities(body.capabilities, role);
+
     await connectToDatabase();
 
     const existingUser = await User.findOne({ email });
@@ -106,6 +137,7 @@ export async function POST(req: Request) {
       role,
       companyId: new mongoose.Types.ObjectId(companyId),
       departmentId: departmentId ? new mongoose.Types.ObjectId(departmentId) : undefined,
+      capabilities,
     });
 
     // Automatically create Driver profile if role is driver
@@ -135,7 +167,8 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { _id, name, email, username, password, role, departmentId } = await req.json();
+    const body = await req.json();
+    const { _id, name, email, username, password, role, departmentId } = body;
 
     if (!_id) {
       return NextResponse.json({ error: "User ID is required" }, { status: 400 });
@@ -199,6 +232,16 @@ export async function PUT(req: Request) {
     // Update password optionally
     if (password && password.trim() !== '') {
       userToUpdate.passwordHash = await bcrypt.hash(password, 10);
+    }
+
+    // Device capabilities. Only touched when the client actually sends them, so
+    // an older edit form that knows nothing about this field cannot silently
+    // strip a driver's location tracking on an unrelated save.
+    if (body.capabilities !== undefined) {
+      userToUpdate.capabilities = normalizeCapabilities(
+        body.capabilities,
+        role || userToUpdate.role
+      );
     }
 
     await userToUpdate.save();
